@@ -1,0 +1,18 @@
+projekt do sprawdzania temperatury w lodówkach w sklepie
+
+1. esp32
+- łączenie się przez ble i wifi
+- wykonywanie pomiarów
+- wysyłanie przetworzonych danych do brokera mqtt 
+
+2. backend
+- przetwarzanie danych pobranych z brokera mqtt
+- wysyłanie powiadomień z trescia o zbyt niskiej temperaturze
+
+3. aplikacja mobilna
+- łączenie się przez ble w celu ustawienia danych do wifi w pamięci nvs w esp32
+- pokazywanie aktualnych temperatur w lodówkach
+- pokazywanie wykresów temperatury od czasu
+- wysyłanie powiadomienia kiedy temperatura w ladowce spadnie poza ustawiona przez użytkownika temperaturę i bedzie sie utrzymywac przez jakis czas
+
+
