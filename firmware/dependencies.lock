@@ -1,0 +1,18 @@
+dependencies:
+  idf:
+    source:
+      type: idf
+    version: 5.5.1
+  zorxx/bmp180:
+    component_hash: 4e99150d92323cd236b7cd189d5f4d2a13dd784510a94b3dac30b08b66a087a5
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.3.0
+direct_dependencies:
+- idf
+- zorxx/bmp180
+manifest_hash: 37d951f66f4b03695af07476621a7f227fa6e9947aa31f1177942405185f089f
+target: esp32
+version: 2.0.0

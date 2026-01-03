@@ -1,0 +1,7 @@
+- plytka kiedy nie jest podlaczona do internetu zapisje dane do pamieci flash
+- ble mozna wlaczyc przytzymujac dlugo (4 sekundy) przycisk boot
+- ble wylacza sie po 3 min jezeli nic przez nie nie przesylamy
+- mozna sie polaczyc do wifi konfigurujac dane przez ble ktore sa zapisywane w pamieci flash
+- jesli nie ma polaczenia z wifi to esp probuje sie polaczyc co 5 min
+- po polaczeniu wszystkie dane sa wysylane do brokea mqtt i usuwane z pamieci flash a nowe sa wysylane do brokera i nie sa zapisywane jezeli jest internet
+- pomiary sa wysylane co 5/10 min w tym czasie wifi jest wylaczane aby zminimalizowac uzycie energii
