@@ -6,7 +6,7 @@
 static const char *TAG = "MQTT_HANDLER";
 
 // --- KONFIGURACJA BROKERA (Możesz zmienić na swój) ---
-#define MQTT_BROKER_URI "mqtt://broker.hivemq.com"
+#define MQTT_BROKER_URI "local"
 #define MQTT_TOPIC      "esp32/smartfridge/data"
 
 // Flagi zdarzeń
