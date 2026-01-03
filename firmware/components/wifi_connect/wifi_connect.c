@@ -18,7 +18,7 @@ static const char *TAG = "WIFI_CONN";
 
 #define DEFAULT_SSID      "TwojaSiec"
 #define DEFAULT_PASS      "TwojeHaslo"
-#define MAX_RETRY         10
+#define MAX_RETRY         3
 
 // Konfiguracja testu internetu (Ping do Google DNS)
 #define INTERNET_TEST_IP  "8.8.8.8"
@@ -33,7 +33,6 @@ static bool s_is_connected = false;
 static bool s_allow_reconnect = true; 
 
 // --- FUNKCJA POMOCNICZA: SPRAWDZANIE INTERNETU ---
-// Próbuje połączyć się z 8.8.8.8:53. Zwraca true, jeśli jest wyjście na świat.
 static bool check_internet_connection(void) {
     ESP_LOGI(TAG, "Weryfikacja dostepu do Internetu (Ping 8.8.8.8)...");
 
@@ -50,7 +49,6 @@ static bool check_internet_connection(void) {
         return false;
     }
 
-    // Ustawienie timeoutu na 3 sekundy, żeby nie wisieć
     struct timeval timeout;
     timeout.tv_sec = 3;
     timeout.tv_usec = 0;
@@ -102,8 +100,14 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 
 void wifi_connect_init(void) {
     s_wifi_event_group = xEventGroupCreate();
+    
+    // Inicjalizacja stosu sieciowego (bezpieczna do wielokrotnego wywołania)
     ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    
+    // --- POPRAWKA TUTAJ: USUNIĘTO esp_event_loop_create_default() ---
+    // Pętla zdarzeń jest już utworzona w app_main().
+    // Wywołanie jej tutaj drugi raz powodowało błąd i restart ESP32.
+    
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -136,17 +140,12 @@ esp_err_t wifi_connect_start(void) {
             WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
             pdFALSE, pdFALSE, portMAX_DELAY);
 
-    // ZMIANA TUTAJ:
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Polaczono z lokalnym routerem. Weryfikuje WAN...");
         
-        // Tutaj sprawdzamy, czy faktycznie jest internet
         if (check_internet_connection()) {
-            return ESP_OK; // Mamy WiFi i mamy Internet
+            return ESP_OK; 
         } else {
-            // Mamy WiFi, ale nie mamy Internetu -> Uznajemy to za BŁĄD,
-            // żeby główny program przeszedł w tryb offline.
-            // Opcjonalnie: Możemy tu rozłączyć WiFi, żeby nie marnować prądu
             wifi_connect_stop(); 
             return ESP_FAIL; 
         }
@@ -162,8 +161,6 @@ void wifi_connect_stop(void) {
     s_is_connected = false;
     
     ESP_LOGI(TAG, "Wylaczam WiFi...");
-    // Sprawdzamy, czy WiFi jest w ogóle włączone, zanim zatrzymamy
-    // (pomija błędy, jeśli już zatrzymane)
     esp_wifi_stop(); 
 }
 

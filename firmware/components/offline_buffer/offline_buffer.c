@@ -49,7 +49,7 @@ esp_err_t offline_buffer_add(SensorData data) {
     fwrite(&data, sizeof(SensorData), 1, f);
     fclose(f);
     
-    ESP_LOGI(TAG, "Zapisano offline: T:%.1f H:%.1f", data.temp, data.humidity);
+    ESP_LOGI(TAG, "Zapisano offline: T:%.2f C, P:%lu Pa", data.temp, data.pressure);
     return ESP_OK;
 }
 
