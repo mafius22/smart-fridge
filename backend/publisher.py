@@ -1,0 +1,53 @@
+import json
+import time
+import random
+from datetime import datetime, timezone
+
+import paho.mqtt.client as mqtt
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BROKER = os.getenv("MQTT_BROKER", "localhost")
+PORT = int(os.getenv("MQTT_PORT", 1883))
+TOPIC = "esp32/smartfridge/data"
+INTERVAL_S = 2
+
+MQTT_USER = None   # wpisz np. "user" jeśli masz
+MQTT_PASS = None   # wpisz np. "pass" jeśli masz
+
+def unix_ts() -> int:
+    return int(datetime.now(timezone.utc).timestamp())
+
+def make_payload() -> dict:
+    temp = round(random.uniform(2.0, 8.0), 1)          # przykładowa temp lodówki
+    press = random.randint(98000, 103000)              # przykładowe ciśnienie w Pa
+    return {"ts": unix_ts(), "temp": temp, "press": press}
+
+def main():
+    client = mqtt.Client()
+
+    if MQTT_USER and MQTT_PASS:
+        client.username_pw_set(MQTT_USER, MQTT_PASS)
+
+    client.connect(BROKER, PORT, keepalive=60)
+    client.loop_start()
+
+    try:
+        while True:
+            payload = make_payload()
+            msg = json.dumps(payload, separators=(",", ":"))
+            info = client.publish(TOPIC, msg, qos=1)
+            info.wait_for_publish()
+
+            print("Wysłano:", msg)
+            time.sleep(INTERVAL_S)
+    except KeyboardInterrupt:
+        print("\nStop")
+    finally:
+        client.loop_stop()
+        client.disconnect()
+
+if __name__ == "__main__":
+    main()

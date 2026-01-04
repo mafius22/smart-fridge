@@ -5,20 +5,26 @@ from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# --- KONFIGURACJA (DOSTOSUJ DO SWOJEGO ŚRODOWISKA) ---
+import os
+from dotenv import load_dotenv
 
-# 1. Konfiguracja MQTT (Mosquitto)
-MQTT_BROKER = "local"  
-MQTT_PORT = 1883
+load_dotenv()
+
+MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
+MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MQTT_TOPIC = "esp32/smartfridge/data"
 
-# Jeśli Twoje Mosquitto wymaga logowania (zalecane):
-MQTT_USER = "None"      # Zmień na None, jeśli brak hasła
-MQTT_PASS = "None"    # Zmień na None, jeśli brak hasła
+MQTT_USER = os.getenv("MQTT_USER")
+MQTT_PASS = os.getenv("MQTT_PASS")
 
-# 2. Konfiguracja Bazy Danych
-DB_FILE = "lodowka_orm.db"
-CONN_STRING = f"sqlite:///{DB_FILE}"
+
+DATABASE_FILE = os.getenv("DATABASE_FILE")
+CONN_STRING = f"sqlite:///{DATABASE_FILE}"
+
+# Dalej Twój kod wygląda tak samo, ale zmienne są już bezpieczne...
+# Np. w funkcji on_connect:
+# if MQTT_USER and MQTT_PASS:
+#     client.username_pw_set(MQTT_USER, MQTT_PASS)
 
 # 3. Logika Alarmowa
 ALARM_TEMP = 30.0
