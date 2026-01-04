@@ -9,7 +9,7 @@ projekt do sprawdzania temperatury w lodówkach w sklepie
 - przetwarzanie danych pobranych z brokera mqtt
 - wysyłanie powiadomień z trescia o zbyt niskiej temperaturze
 
-3. aplikacja mobilna
+3. frontend
 - łączenie się przez ble w celu ustawienia danych do wifi w pamięci nvs w esp32
 - pokazywanie aktualnych temperatur w lodówkach
 - pokazywanie wykresów temperatury od czasu
