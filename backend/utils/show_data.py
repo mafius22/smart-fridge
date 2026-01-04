@@ -5,10 +5,10 @@ load_dotenv()
 
 DATABASE_FILE = os.getenv("DATABASE_FILE")
 
-con = sqlite3.connect(DATABASE_FILE)
+con = sqlite3.connect("instance/" + DATABASE_FILE)
 cur = con.cursor()
 
-cur.execute("SELECT * FROM pomiary")
+cur.execute("SELECT * FROM subscribers")
 rows = cur.fetchall()
 
 for r in rows:

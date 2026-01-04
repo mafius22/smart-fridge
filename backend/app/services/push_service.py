@@ -42,7 +42,9 @@ def send_alert_to_all(temperature, app):
                     },
                     data=payload,
                     vapid_private_key=vapid_private,
-                    vapid_claims={"sub": vapid_email}
+                    vapid_claims={"sub": vapid_email},
+                    ttl=86400,            # Ważność: 24h
+                    headers={"Urgency": "high"}
                 )
             except WebPushException as ex:
                 if ex.response and ex.response.status_code == 410:

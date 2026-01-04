@@ -31,22 +31,18 @@ def start_mqtt_client(app):
             press = float(data.get("press", 0))
             ts = int(data.get("ts", 0))
 
-            # WAŻNE: Wątek MQTT nie zna kontekstu Flaska. Musimy go stworzyć ręcznie.
             with app.app_context():
                 new_m = Measurement(esp_timestamp=ts, temperature=temp, pressure=press)
                 db.session.add(new_m)
                 db.session.commit()
                 print(f"Zapisano: {temp}")
 
-                # Sprawdzenie alarmu
                 if temp > ALARM_THRESHOLD:
-                    # Wywołujemy serwis push (przekazując app)
                     send_alert_to_all(temp, app)
 
         except Exception as e:
             logger.error(f"Błąd w on_message: {e}")
 
-    # Konfiguracja klienta
     try:
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     except AttributeError:
