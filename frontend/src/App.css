@@ -1,0 +1,79 @@
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.status-bar {
+  font-size: 0.9rem;
+  color: #666;
+  margin-bottom: 10px;
+}
+
+.status-bar.error {
+  color: red;
+  font-weight: bold;
+}
+
+.card-grid {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.card {
+  background: #2a2a2a;
+  padding: 2em;
+  border-radius: 15px;
+  min-width: 200px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+  color: white;
+}
+
+.temp-card.alarm {
+  background: #741b1b; /* Czerwone tło przy alarmie */
+  animation: pulse 2s infinite;
+}
+
+.value {
+  font-size: 3rem;
+  font-weight: bold;
+  margin-top: 10px;
+}
+
+.subscribe-btn {
+  margin-top: 30px;
+  padding: 15px 30px;
+  font-size: 1.2rem;
+  background-color: #646cff;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+
+.subscribe-btn:disabled {
+  background-color: #444;
+  cursor: not-allowed;
+}
+
+.subscribe-btn:hover:not(:disabled) {
+  background-color: #535bf2;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.7); }
+  70% { box-shadow: 0 0 0 20px rgba(255, 0, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0); }
+}
