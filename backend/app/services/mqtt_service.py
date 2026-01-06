@@ -4,7 +4,7 @@ import logging
 import paho.mqtt.client as mqtt
 from app import db
 from app.models.measurement import Measurement
-from app.services.push_service import send_alert_to_all
+from app.services.push_service import send_alert
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +36,7 @@ def start_mqtt_client(app):
                 db.session.add(new_m)
                 db.session.commit()
                 print(f"Zapisano: {temp}")
-
-                if temp > ALARM_THRESHOLD:
-                    send_alert_to_all(temp, app)
+                send_alert(temp, app)
 
         except Exception as e:
             logger.error(f"Błąd w on_message: {e}")

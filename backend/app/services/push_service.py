@@ -8,9 +8,9 @@ from app.models.subscriber import PushSubscriber
 # Setup loggera
 logger = logging.getLogger(__name__)
 
-def send_alert_to_all(temperature, app):
+def send_alert(temperature, app):
     """
-    Wysyła powiadomienie do wszystkich.
+    Wysyła powiadomienie do tych subskrybentów którzy maja wlaczone powiadomienia i temperatura jest wyzsza od ich progu.
     Wymaga przekazania 'app', aby wejść w kontekst bazy danych.
     """
     vapid_private = os.getenv("VAPID_PRIVATE_KEY")
@@ -20,7 +20,6 @@ def send_alert_to_all(temperature, app):
         logger.error("Brak klucza VAPID_PRIVATE_KEY w .env!")
         return
 
-    # Musimy wejść w kontekst aplikacji, bo działamy w wątku MQTT
     with app.app_context():
         subscribers = PushSubscriber.query.all()
         
@@ -34,23 +33,25 @@ def send_alert_to_all(temperature, app):
         })
 
         for sub in subscribers:
-            try:
-                webpush(
-                    subscription_info={
-                        "endpoint": sub.endpoint,
-                        "keys": {"p256dh": sub.p256dh, "auth": sub.auth}
-                    },
-                    data=payload,
-                    vapid_private_key=vapid_private,
-                    vapid_claims={"sub": vapid_email},
-                    ttl=86400,            # Ważność: 24h
-                    headers={"Urgency": "high"}
-                )
-            except WebPushException as ex:
-                if ex.response and ex.response.status_code == 410:
-                    logger.info(f"Usuwanie nieaktywnego subskrybenta: {sub.id}")
-                    db.session.delete(sub)
-                else:
-                    logger.error(f"Błąd Push: {ex}")
+            if sub.is_active and sub.custom_threshold < temperature:
+
+                try:
+                    webpush(
+                        subscription_info={
+                            "endpoint": sub.endpoint,
+                            "keys": {"p256dh": sub.p256dh, "auth": sub.auth}
+                        },
+                        data=payload,
+                        vapid_private_key=vapid_private,
+                        vapid_claims={"sub": vapid_email},
+                        ttl=86400,            # Ważność: 24h
+                        headers={"Urgency": "high"}
+                    )
+                except WebPushException as ex:
+                    if ex.response and ex.response.status_code == 410:
+                        logger.info(f"Usuwanie nieaktywnego subskrybenta: {sub.id}")
+                        db.session.delete(sub)
+                    else:
+                        logger.error(f"Błąd Push: {ex}")
         
         db.session.commit()

@@ -1,0 +1,14 @@
+serwis:
+- pobieranie danych za pomoca brokera mqtt
+- jezeli pobrana temperatura jest wyzsza od zadanej przez uzytkownika
+  serwer wysyla powiadomienie push
+
+api:
+- rejestrowanie subskrypcji powiadomienien
+- wysylanie najmlodszego pomiaru
+- wysylanie pomiarow w zadanym przedziale czasowym
+
+
+cd "C:\Program Files\mosquitto"
+.\mosquitto.exe -c local.conf.txt -v
+  
