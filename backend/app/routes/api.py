@@ -6,7 +6,7 @@ from app.services.measurement_service import MeasurementService
 
 api_bp = Blueprint('api', __name__)
 
-
+# --- STATUS I KLUCZ VAPID ---
 @api_bp.route('/status', methods=['GET'])
 def get_status():
     """Zwraca ostatni pomiar + klucz VAPID"""
@@ -19,9 +19,11 @@ def get_status():
         "data": data
     })
 
+# --- ZARZĄDZANIE SUBSKRYPCJAMI ---
 
 @api_bp.route('/subscribe', methods=['POST'])
 def subscribe():
+    """Tworzy nową subskrypcję"""
     if not request.is_json:
         return jsonify({"error": "Format danych musi być JSON"}), 415
 
@@ -49,6 +51,7 @@ def subscribe():
 
 @api_bp.route('/subscribe', methods=['PUT'])
 def update_subscription():
+    """Aktualizuje ustawienia istniejącej subskrypcji"""
     data = request.json
     
     if 'endpoint' not in data:
@@ -64,6 +67,27 @@ def update_subscription():
         return jsonify({"message": msg}), 200
     return jsonify({"error": msg}), 404
 
+
+@api_bp.route('/subscribe', methods=['GET'])
+def get_subscription_settings():
+    """
+    Pobiera ustawienia dla konkretnego użytkownika.
+    Oczekuje parametru w URL: ?endpoint=...
+    """
+    endpoint = request.args.get('endpoint')
+    
+    if not endpoint:
+        return jsonify({"error": "Brak parametru 'endpoint'"}), 400
+
+    subscriber_data = SubscriberService.get_settings_by_endpoint(endpoint)
+
+    if subscriber_data:
+        return jsonify(subscriber_data), 200
+    
+    return jsonify({"error": "Nie znaleziono subskrypcji"}), 404
+
+
+# --- HISTORIA POMIARÓW ---
 
 @api_bp.route('/measurements', methods=['GET'])
 def get_measurements_history():

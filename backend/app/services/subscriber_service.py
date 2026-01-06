@@ -56,3 +56,19 @@ class SubscriberService:
         except Exception as e:
             db.session.rollback()
             return False, str(e)
+        
+
+    @staticmethod
+    def get_settings_by_endpoint(endpoint):
+        try:
+            sub = PushSubscriber.query.filter_by(endpoint=endpoint).first()
+            
+            if sub:
+                return {
+                    "is_active": sub.is_active,
+                    "custom_threshold": sub.custom_threshold
+                }
+            return None
+        except Exception as e:
+            print(f"Błąd pobierania ustawień: {e}")
+            return None

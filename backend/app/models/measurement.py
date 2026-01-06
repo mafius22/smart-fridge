@@ -15,5 +15,5 @@ class Measurement(db.Model):
         return {
             "temp": self.temperature,
             "press": self.pressure,
-            "time": self.timestamp.strftime("%H:%M:%S")
+            "time": self.timestamp.isoformat()
         }
