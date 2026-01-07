@@ -46,7 +46,8 @@ def start_mqtt_client(app):
     except AttributeError:
         client = mqtt.Client()
 
-    user = os.getenv("MQTT_USER")
+    client.tls_set()
+    user = os.getenv("MQTT_LOGIN")
     passwd = os.getenv("MQTT_PASS")
     if user and passwd:
         client.username_pw_set(user, passwd)

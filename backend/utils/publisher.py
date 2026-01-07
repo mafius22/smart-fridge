@@ -10,11 +10,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BROKER = os.getenv("MQTT_BROKER", "localhost")
-PORT = int(os.getenv("MQTT_PORT", 1883))
+PORT = int(os.getenv("MQTT_PORT", 8883))
 TOPIC = "esp32/smartfridge/data"
 INTERVAL_S = 20
-MQTT_USER = None   # wpisz np. "user" jeśli masz
-MQTT_PASS = None   # wpisz np. "pass" jeśli masz
+
+MQTT_USER = os.getenv("MQTT_LOGIN", 8883)
+MQTT_PASS = os.getenv("MQTT_PASS", 8883)
 
 def unix_ts() -> int:
     return int(datetime.now(timezone.utc).timestamp())
@@ -26,6 +27,7 @@ def make_payload() -> dict:
 
 def main():
     client = mqtt.Client()
+    client.tls_set()
 
     if MQTT_USER and MQTT_PASS:
         client.username_pw_set(MQTT_USER, MQTT_PASS)

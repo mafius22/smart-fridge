@@ -5,7 +5,18 @@ import { Bell, BellOff, Save, RefreshCw, Thermometer, Gauge, Activity, Calendar,
 import { format, subHours, parseISO } from 'date-fns';
 import './App.css';
 
+// --- KONFIGURACJA API (FIX DLA NGROK) ---
 const API_URL = import.meta.env.VITE_API_URL;
+
+// Tworzymy instancję axios, żeby automatycznie dodawać nagłówki
+// To naprawia problem z ostrzeżeniem Ngroka
+const apiClient = axios.create({
+  baseURL: API_URL,
+  headers: {
+    'Content-Type': 'application/json',
+    'ngrok-skip-browser-warning': 'true' // <--- TO NAPRAWIA BŁĄD POBIERANIA DANYCH
+  }
+});
 
 // Helper: Konwersja klucza VAPID
 function urlBase64ToUint8Array(base64String) {
@@ -21,13 +32,13 @@ function urlBase64ToUint8Array(base64String) {
 
 function App() {
   // --- STANY DANYCH ---
-  const [currentData, setCurrentData] = useState({ temp: null, press: null, time: null });
+  // Inicjalizujemy zerami, żeby UI nie skakało
+  const [currentData, setCurrentData] = useState({ temp: 0, press: 0, time: null });
   const [historyData, setHistoryData] = useState([]);
   const [vapidKey, setVapidKey] = useState(null);
   
-  // --- STANY UI I FILTRÓW (NOWE) ---
+  // --- STANY UI I FILTRÓW ---
   const [dateRange, setDateRange] = useState({
-    // Domyślnie: od wczoraj do teraz (format dla input type="datetime-local")
     start: format(subHours(new Date(), 24), "yyyy-MM-dd'T'HH:mm"),
     end: format(new Date(), "yyyy-MM-dd'T'HH:mm")
   });
@@ -39,6 +50,7 @@ function App() {
 
   // --- STANY UŻYTKOWNIKA ---
   const [userEndpoint, setUserEndpoint] = useState(null);
+  // Ustawiamy domyślne wartości, żeby inputy były "Controlled"
   const [settings, setSettings] = useState({ isActive: true, threshold: 8.0 });
   const [isSubscribedBrowser, setIsSubscribedBrowser] = useState(false);
   const [status, setStatus] = useState({ type: 'info', msg: 'Inicjalizacja...' });
@@ -48,7 +60,8 @@ function App() {
   useEffect(() => {
     const init = async () => {
       try {
-        const statusRes = await axios.get(`${API_URL}/status`);
+        const statusRes = await apiClient.get('/status');
+        
         if (statusRes.data.vapid_public_key) setVapidKey(statusRes.data.vapid_public_key);
         if (statusRes.data.data) setCurrentData(statusRes.data.data);
 
@@ -60,13 +73,19 @@ function App() {
             setUserEndpoint(sub.endpoint);
             setIsSubscribedBrowser(true);
             try {
-              const settingsRes = await axios.get(`${API_URL}/subscribe`, { params: { endpoint: sub.endpoint } });
-              setSettings({ isActive: settingsRes.data.is_active, threshold: settingsRes.data.custom_threshold });
+              const settingsRes = await apiClient.get('/subscribe', { params: { endpoint: sub.endpoint } });
+              setSettings({ 
+                isActive: settingsRes.data.is_active ?? true, 
+                threshold: settingsRes.data.custom_threshold ?? 8.0 
+              });
               setStatus({ type: 'success', msg: 'Załadowano profil' });
-            } catch (err) { console.warn(err); }
+            } catch (err) { console.warn("Brak profilu w bazie dla tej subskrypcji", err); }
           }
         }
-      } catch (error) { setStatus({ type: 'error', msg: 'Błąd połączenia' }); }
+      } catch (error) { 
+        console.error("Init Error:", error);
+        setStatus({ type: 'error', msg: 'Błąd połączenia z serwerem' }); 
+      }
     };
     init();
   }, []);
@@ -75,36 +94,44 @@ function App() {
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await axios.get(`${API_URL}/status`);
+        const res = await apiClient.get('/status');
         if (res.data.data) setCurrentData(res.data.data);
-      } catch (e) { console.error(e); }
+      } catch (e) { 
+        // Cichy błąd przy poolingu, żeby nie spamować
+        console.error("Polling error", e); 
+      }
     }, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  // 3. Pobieranie historii z uwzględnieniem inputów daty
+  // 3. Pobieranie historii (POPRAWIONE ZABEZPIECZENIA)
   const fetchHistory = useCallback(async () => {
     setLoadingHistory(true);
     try {
-      // Pobieramy wartości z inputów (są w formacie YYYY-MM-DDTHH:mm)
       const startDate = new Date(dateRange.start);
       const endDate = new Date(dateRange.end);
-
-      // Konwertujemy na format dla Pythona (YYYY-MM-DD HH:mm:ss)
       const startStr = format(startDate, 'yyyy-MM-dd HH:mm:ss');
       const endStr = format(endDate, 'yyyy-MM-dd HH:mm:ss');
 
       console.log(`Pobieranie historii: ${startStr} -> ${endStr}`);
 
-      const res = await axios.get(`${API_URL}/measurements`, {
+      const res = await apiClient.get('/measurements', {
         params: { start: startStr, end: endStr }
       });
       
-      const formatted = res.data.data.map(item => {
+      // ZABEZPIECZENIE: Sprawdzamy czy data istnieje i jest tablicą
+      const rawData = res.data.data;
+      if (!Array.isArray(rawData)) {
+        console.warn("Otrzymano nieprawidłowe dane historii:", rawData);
+        setHistoryData([]); 
+        return;
+      }
+
+      const formatted = rawData.map(item => {
         try {
           const dateObj = new Date(item.time);
           return {
-            time: format(dateObj, 'HH:mm'), // Format na oś X
+            time: format(dateObj, 'HH:mm'),
             fullDate: item.time,
             temp: item.temp,
             press: item.press ? (item.press / 100).toFixed(0) : 0
@@ -113,43 +140,59 @@ function App() {
       }).filter(Boolean);
       
       setHistoryData(formatted);
+      setStatus({ type: 'success', msg: `Pobrano ${formatted.length} pomiarów` });
+
     } catch (error) {
       console.error("Błąd historii:", error);
       setStatus({ type: 'error', msg: 'Błąd pobierania historii' });
+      setHistoryData([]); // Czyścimy wykres w razie błędu
     } finally {
       setLoadingHistory(false);
     }
-  }, [dateRange]); // Zależność od dateRange (żeby pobierał właściwe daty)
+  }, [dateRange]);
 
   // Pobierz historię przy pierwszym uruchomieniu
-  useEffect(() => { fetchHistory(); }, []);
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
-  // Handler zmiany daty w inputach
   const handleDateChange = (e) => {
     setDateRange({ ...dateRange, [e.target.name]: e.target.value });
   };
 
-  // --- REST OF FUNCTIONS (Subscribe, Save) ---
+  // --- POZOSTAŁE FUNKCJE ---
   const handleSubscribe = async () => {
-    if (!vapidKey) return alert("Błąd: Brak klucza VAPID.");
+    if (!vapidKey) return alert("Błąd: Serwer nie zwrócił klucza VAPID. Odśwież stronę.");
     try {
       setStatus({ type: 'info', msg: 'Rejestrowanie...' });
       const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(vapidKey) });
-      await axios.post(`${API_URL}/subscribe`, { endpoint: sub.endpoint, keys: sub.toJSON().keys });
+      const sub = await reg.pushManager.subscribe({ 
+        userVisibleOnly: true, 
+        applicationServerKey: urlBase64ToUint8Array(vapidKey) 
+      });
+      
+      await apiClient.post('/subscribe', { endpoint: sub.endpoint, keys: sub.toJSON().keys });
+      
       setUserEndpoint(sub.endpoint);
       setIsSubscribedBrowser(true);
       setStatus({ type: 'success', msg: 'Powiadomienia włączone!' });
-    } catch (error) { setStatus({ type: 'error', msg: 'Błąd subskrypcji.' }); }
+    } catch (error) { 
+      console.error(error);
+      setStatus({ type: 'error', msg: 'Błąd subskrypcji.' }); 
+    }
   };
 
   const saveSettings = async () => {
-    if (!userEndpoint) return;
+    if (!userEndpoint) return alert("Brak aktywnej subskrypcji.");
     try {
       setStatus({ type: 'info', msg: 'Zapisywanie...' });
-      await axios.put(`${API_URL}/subscribe`, { endpoint: userEndpoint, is_active: settings.isActive, custom_threshold: parseFloat(settings.threshold) });
+      await apiClient.put('/subscribe', { 
+        endpoint: userEndpoint, 
+        is_active: settings.isActive, 
+        custom_threshold: parseFloat(settings.threshold) 
+      });
       setStatus({ type: 'success', msg: 'Ustawienia zapisane!' });
-    } catch (error) { setStatus({ type: 'error', msg: 'Błąd zapisu ustawień.' }); }
+    } catch (error) { 
+      setStatus({ type: 'error', msg: 'Błąd zapisu ustawień.' }); 
+    }
   };
 
   return (
@@ -170,7 +213,7 @@ function App() {
             <div className="icon-wrapper temp"><Thermometer /></div>
             <div className="stat-content">
               <h3>Temperatura</h3>
-              <div className="value">{currentData.temp?.toFixed(1) ?? '--'} °C</div>
+              <div className="value">{currentData.temp !== null ? Number(currentData.temp).toFixed(1) : '--'} °C</div>
               <span className="subtitle">Limit: {settings.threshold}°C</span>
             </div>
           </div>
@@ -183,10 +226,8 @@ function App() {
           </div>
         </section>
 
-        {/* PRAWA KOLUMNA: Zaawansowany Wykres */}
+        {/* PRAWA KOLUMNA: Wykres */}
         <section className="chart-section">
-          
-          {/* PASEK KONTROLNY WYKRESU */}
           <div className="chart-controls">
             <div className="date-inputs">
               <div className="input-group">
@@ -234,61 +275,61 @@ function App() {
 
           <div className="chart-wrapper">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={historyData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                <XAxis dataKey="time" tick={{fontSize: 12}} />
-                
-                {/* Oś Y Lewa (Temperatura) - znika jeśli odznaczysz temp */}
-                <YAxis 
-                  yAxisId="left" 
-                  domain={['auto', 'auto']} 
-                  hide={!visibility.showTemp}
-                />
-                
-                {/* Oś Y Prawa (Ciśnienie) - znika jeśli odznaczysz press */}
-                <YAxis 
-                  yAxisId="right" 
-                  orientation="right" 
-                  domain={['auto', 'auto']} 
-                  hide={!visibility.showPress} 
-                />
-                
-                <Tooltip 
-                  labelFormatter={(label, payload) => {
-                    if (payload && payload.length > 0) return `Czas: ${payload[0].payload.fullDate}`;
-                    return label;
-                  }}
-                />
-                <Legend />
-
-                {/* Linia Temperatury - renderuje się tylko jeśli showTemp === true */}
-                {visibility.showTemp && (
-                  <Line 
+              {/* Dodano sprawdzenie czy są dane, żeby wykres nie rzucał błędami */}
+              {historyData && historyData.length > 0 ? (
+                <LineChart data={historyData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <XAxis dataKey="time" tick={{fontSize: 12}} />
+                  
+                  <YAxis 
                     yAxisId="left" 
-                    type="monotone" 
-                    dataKey="temp" 
-                    stroke="#ef4444" 
-                    strokeWidth={2} 
-                    dot={false} 
-                    name="Temp (°C)"
-                    animationDuration={500}
+                    domain={['auto', 'auto']} 
+                    hide={!visibility.showTemp}
                   />
-                )}
-
-                {/* Linia Ciśnienia - renderuje się tylko jeśli showPress === true */}
-                {visibility.showPress && (
-                  <Line 
+                  <YAxis 
                     yAxisId="right" 
-                    type="monotone" 
-                    dataKey="press" 
-                    stroke="#3b82f6" 
-                    strokeWidth={2} 
-                    dot={false} 
-                    name="Ciśnienie (hPa)"
-                    animationDuration={500}
+                    orientation="right" 
+                    domain={['auto', 'auto']} 
+                    hide={!visibility.showPress} 
                   />
-                )}
-              </LineChart>
+                  
+                  <Tooltip 
+                    labelFormatter={(label, payload) => {
+                      if (payload && payload.length > 0) return `Czas: ${payload[0].payload.fullDate}`;
+                      return label;
+                    }}
+                  />
+                  <Legend />
+
+                  {visibility.showTemp && (
+                    <Line 
+                      yAxisId="left" 
+                      type="monotone" 
+                      dataKey="temp" 
+                      stroke="#ef4444" 
+                      strokeWidth={2} 
+                      dot={false} 
+                      name="Temp (°C)"
+                      animationDuration={500}
+                    />
+                  )}
+
+                  {visibility.showPress && (
+                    <Line 
+                      yAxisId="right" 
+                      type="monotone" 
+                      dataKey="press" 
+                      stroke="#3b82f6" 
+                      strokeWidth={2} 
+                      dot={false} 
+                      name="Ciśnienie (hPa)"
+                      animationDuration={500}
+                    />
+                  )}
+                </LineChart>
+              ) : (
+                <div className="no-data-msg">Brak danych dla wybranego okresu lub błąd połączenia.</div>
+              )}
             </ResponsiveContainer>
           </div>
         </section>
@@ -306,7 +347,13 @@ function App() {
               </label>
               <div className="threshold-input">
                 <label>Próg (°C):</label>
-                <input type="number" step="0.5" value={settings.threshold} onChange={(e) => setSettings({...settings, threshold: e.target.value})}/>
+                {/* Zabezpieczenie wartości inputa */}
+                <input 
+                    type="number" 
+                    step="0.5" 
+                    value={settings.threshold || ''} 
+                    onChange={(e) => setSettings({...settings, threshold: e.target.value})}
+                />
               </div>
               <button className="btn-save" onClick={saveSettings}><Save size={18}/> Zapisz</button>
             </div>
