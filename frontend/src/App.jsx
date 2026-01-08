@@ -190,7 +190,17 @@ const fetchHistory = useCallback(async () => {
           <LayoutDashboard size={28} />
           <h1>Smart Fridge Manager</h1>
         </div>
+        
         <div className={`status-badge ${status.type}`}>{status.msg}</div>
+        
+        {/* Ustawienia */}
+        <NotificationSettings 
+          isSubscribed={isSubscribedBrowser}
+          settings={settings}
+          setSettings={setSettings}
+          onSubscribe={handleSubscribe}
+          onSave={saveSettings}
+        />
       </header>
 
       <main className="dashboard-grid">
@@ -214,14 +224,6 @@ const fetchHistory = useCallback(async () => {
           selectedDeviceName={devices.find(d => d.device_id === selectedDeviceId)?.name || selectedDeviceId}
         />
 
-        {/* Ustawienia */}
-        <NotificationSettings 
-          isSubscribed={isSubscribedBrowser}
-          settings={settings}
-          setSettings={setSettings}
-          onSubscribe={handleSubscribe}
-          onSave={saveSettings}
-        />
       </main>
 
       <footer className="footer">System IoT v3.0 Multi-Device</footer>

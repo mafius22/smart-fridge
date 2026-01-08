@@ -14,8 +14,6 @@ PORT = int(os.getenv("MQTT_PORT", 8883))
 BASE_TOPIC = "esp32/smartfridge" 
 
 DEVICES = ["lodowka_kuchnia", "zamrazarka_piwnica", "chlodziarka_wino"]
-xd = [str(x) for x in range(100)]
-DEVICES = DEVICES+xd
 
 INTERVAL_S = 20
 

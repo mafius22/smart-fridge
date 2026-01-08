@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { Search, RefreshCw, BarChart2 } from 'lucide-react';
 
@@ -8,11 +8,11 @@ export default function HistoryChart({
   onDateChange, 
   onSearch, 
   isLoading, 
-  visibility, 
-  setVisibility,
   selectedDeviceName 
 }) {
 
+  // Sprawdzamy, czy mamy dane do wyświetlenia
+  const hasData = data && data.length > 0;
 
   return (
     <section className="chart-section">
@@ -47,31 +47,15 @@ export default function HistoryChart({
             {isLoading ? <RefreshCw className="spin" size={18}/> : <Search size={18}/>}
           </button>
         </div>
-
-        <div className="toggles">
-          <label className={`toggle-btn ${visibility.showTemp ? 'active-temp' : ''}`}>
-            <input 
-              type="checkbox" 
-              checked={visibility.showTemp} 
-              onChange={(e) => setVisibility({...visibility, showTemp: e.target.checked})} 
-            />
-            Temp
-          </label>
-          <label className={`toggle-btn ${visibility.showPress ? 'active-press' : ''}`}>
-            <input 
-              type="checkbox" 
-              checked={visibility.showPress} 
-              onChange={(e) => setVisibility({...visibility, showPress: e.target.checked})} 
-            />
-            Ciśnienie
-          </label>
-        </div>
+        
+        {/* Usunąłem sekcję .toggles, ponieważ wyświetlamy tylko temperaturę */}
       </div>
 
-      {/* WYMUSZONA WYSOKOŚĆ DLA TESTU */}
-      <div style={{ width: '100%', height: 400, minHeight: 400 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          {data && data.length > 0 ? (
+      {/* Kontener o stałej wysokości */}
+      <div style={{ width: '100%', height: 400, minHeight: 400, position: 'relative' }}>
+        
+        {hasData ? (
+          <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               
@@ -80,56 +64,50 @@ export default function HistoryChart({
                 minTickGap={30}
               />
               
+              {/* Tylko jedna oś Y dla temperatury */}
               <YAxis 
-                yAxisId="left" 
-                hide={!visibility.showTemp}
                 domain={['auto', 'auto']} 
-              />
-              <YAxis 
-                yAxisId="right" 
-                orientation="right" 
-                hide={!visibility.showPress}
-                domain={['auto', 'auto']} 
+                unit="°C"
               />
               
               <Tooltip 
                  labelFormatter={(val) => `Godzina: ${val}`}
+                 formatter={(value) => [`${value}°C`, 'Temperatura']}
               />
               <Legend />
               
-              {visibility.showTemp && (
-                <Line 
-                    yAxisId="left" 
-                    type="monotone" 
-                    dataKey="temp" 
-                    stroke="#ef4444" 
-                    strokeWidth={2} 
-                    dot={false} 
-                    name="Temperatura" 
-                    isAnimationActive={false} // Wyłącz animację dla testu
-                />
-              )}
-              {visibility.showPress && (
-                <Line 
-                    yAxisId="right" 
-                    type="monotone" 
-                    dataKey="press" 
-                    stroke="#3b82f6" 
-                    strokeWidth={2} 
-                    dot={false} 
-                    name="Ciśnienie" 
-                    isAnimationActive={false}
-                />
-              )}
+              {/* Tylko linia temperatury */}
+              <Line 
+                  type="monotone" 
+                  dataKey="temp" 
+                  stroke="#ef4444" 
+                  strokeWidth={3} 
+                  dot={false} 
+                  name="Temperatura" 
+                  isAnimationActive={false} 
+              />
             </LineChart>
-          ) : (
-            <div className="no-data-msg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+          </ResponsiveContainer>
+        ) : (
+          // Ten element wyświetla się ZAMIAST wykresu i centruje tekst
+          <div style={{ 
+            width: '100%', 
+            height: '100%', 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            backgroundColor: '#f9fafb',
+            borderRadius: '8px',
+            border: '1px dashed #e5e7eb',
+            color: '#6b7280'
+          }}>
+              <p style={{ margin: 0, fontWeight: 500 }}>
                 {selectedDeviceName 
-                    ? `Brak danych dla ${selectedDeviceName} (Sprawdź konsolę F12)` 
+                    ? `Brak danych dla ${selectedDeviceName}` 
                     : "Wybierz urządzenie z listy po lewej."}
-            </div>
-          )}
-        </ResponsiveContainer>
+              </p>
+          </div>
+        )}
       </div>
     </section>
   );

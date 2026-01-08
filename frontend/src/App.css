@@ -31,7 +31,6 @@ body {
 }
 
 .app-container {
-  max-width: 1400px; /* Szerszy kontener, bo mamy więcej danych */
   margin: 0 auto;
   padding: 24px;
   min-height: 100vh;
@@ -43,6 +42,7 @@ body {
 .header {
   display: flex;
   justify-content: space-between;
+  gap: 10px;
   align-items: center;
   margin-bottom: 32px;
   background: var(--card-bg);
@@ -106,12 +106,12 @@ body {
 /* Stan aktywny (wybrane urządzenie) */
 .stat-card.device-card.selected {
   border-color: var(--primary);
-  background: #eff6ff;
+  background: #95accd;
 }
 
 .stat-card.warning {
-  border-color: var(--danger);
-  background: #fff1f2;
+  border-color: var(--primary);
+  background: #ffffff;
 }
 
 .icon-wrapper {
@@ -299,4 +299,98 @@ body {
     .date-inputs { flex-direction: column; }
     .input-group input { width: 100%; }
     .btn-search { width: 100%; }
+}
+
+/* Przycisk zębatki */
+.btn-settings-trigger {
+  background: white;
+  border: 1px solid #e5e7eb;
+  padding: 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #4b5563;
+  transition: all 0.2s;
+  /* Opcjonalnie: umieść go w prawym górnym rogu, jeśli nie jest w flexboxie */
+  /* position: absolute; top: 20px; right: 20px; */
+}
+
+.btn-settings-trigger:hover {
+  background: #f3f4f6;
+  color: #000;
+}
+
+/* Tło modala (przyciemnienie reszty strony) */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.5); /* Półprzezroczysty czarny */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000; /* Musi być na wierzchu */
+  backdrop-filter: blur(2px); /* Delikatne rozmycie tła */
+}
+
+/* Samo okno modala */
+.modal-content {
+  background: white;
+  padding: 24px;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 450px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  animation: slideIn 0.2s ease-out;
+}
+
+/* Nagłówek modala z przyciskiem X */
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 10px;
+}
+
+.modal-header h2 {
+  font-size: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.btn-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #9ca3af;
+}
+
+.btn-close:hover {
+  color: #ef4444;
+}
+
+/* Reszta stylów formularza */
+.modal-body .input-group {
+  margin-bottom: 15px;
+}
+
+.modal-actions {
+  margin-top: 20px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.subscribe-prompt {
+    text-align: center;
+}
+
+/* Animacja pojawiania się */
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-20px); }
+  to { opacity: 1; transform: translateY(0); }
 }
