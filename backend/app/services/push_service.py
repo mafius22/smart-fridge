@@ -8,7 +8,7 @@ from app.models.subscriber import PushSubscriber
 # Setup loggera
 logger = logging.getLogger(__name__)
 
-def send_alert(temperature, app):
+def send_alert(temperature, device, app):
     """
     Wysyła powiadomienie do tych subskrybentów którzy maja wlaczone powiadomienia i temperatura jest wyzsza od ich progu.
     Wymaga przekazania 'app', aby wejść w kontekst bazy danych.
@@ -28,7 +28,7 @@ def send_alert(temperature, app):
 
         payload = json.dumps({
             "title": "ALARM TEMPERATURY! 🔥",
-            "body": f"Temperatura wzrosła do {temperature}°C!",
+            "body": f"Temperatura wzrosła do {temperature}°C! w lodówce: {device}",
             "icon": "/vite.svg" # Ikona, którą masz we frontendzie
         })
 

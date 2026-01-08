@@ -2,7 +2,6 @@ import json
 import time
 import random
 from datetime import datetime, timezone
-
 import paho.mqtt.client as mqtt
 import os
 from dotenv import load_dotenv
@@ -11,41 +10,67 @@ load_dotenv()
 
 BROKER = os.getenv("MQTT_BROKER", "localhost")
 PORT = int(os.getenv("MQTT_PORT", 8883))
-TOPIC = "esp32/smartfridge/data"
+
+BASE_TOPIC = "esp32/smartfridge" 
+
+DEVICES = ["lodowka_kuchnia", "zamrazarka_piwnica", "chlodziarka_wino"]
+xd = [str(x) for x in range(100)]
+DEVICES = DEVICES+xd
+
 INTERVAL_S = 20
 
-MQTT_USER = os.getenv("MQTT_LOGIN", 8883)
-MQTT_PASS = os.getenv("MQTT_PASS", 8883)
+MQTT_USER = os.getenv("MQTT_LOGIN", "twoj_login") # Ustaw poprawne lub None
+MQTT_PASS = os.getenv("MQTT_PASS", "twoje_haslo") # Ustaw poprawne lub None
 
 def unix_ts() -> int:
     return int(datetime.now(timezone.utc).timestamp())
 
-def make_payload() -> dict:
-    temp = round(random.uniform(30.0, 38.0), 1)          # przykładowa temp lodówki
-    press = random.randint(98000, 103000)              # przykładowe ciśnienie w Pa
+def make_payload(device_name) -> dict:
+    if "zamrazarka" in device_name:
+        temp = round(random.uniform(-25.0, -15.0), 1) # Mroźno
+    else:
+        temp = round(random.uniform(2.0, 8.0), 1)     # Chłodno
+        
+    press = random.randint(98000, 103000)
     return {"ts": unix_ts(), "temp": temp, "press": press}
 
 def main():
     client = mqtt.Client()
-    client.tls_set()
+    client.tls_set() 
 
     if MQTT_USER and MQTT_PASS:
         client.username_pw_set(MQTT_USER, MQTT_PASS)
 
-    client.connect(BROKER, PORT, keepalive=60)
-    client.loop_start()
-
     try:
-        while True:
-            payload = make_payload()
-            msg = json.dumps(payload, separators=(",", ":"))
-            info = client.publish(TOPIC, msg, qos=1)
-            info.wait_for_publish()
+        client.connect(BROKER, PORT, keepalive=60)
+        client.loop_start()
+        print(f"Połączono z brokerem {BROKER}:{PORT}")
+        print(f"Symuluję urządzenia: {DEVICES}")
 
-            print("Wysłano:", msg)
+        while True:
+            for device_id in DEVICES:
+                # 1. Tworzymy unikalny temat dla urządzenia
+                topic = f"{BASE_TOPIC}/{device_id}/data"
+                
+                # 2. Generujemy dane
+                payload = make_payload(device_id)
+                msg = json.dumps(payload, separators=(",", ":"))
+                
+                # 3. Wysyłamy
+                info = client.publish(topic, msg, qos=1)
+                info.wait_for_publish()
+
+                print(f"[{device_id}] Wysłano na {topic}: {msg}")
+                
+                # Małe opóźnienie między urządzeniami, żeby nie zalać logów w jednej milisekundzie
+
+            print("-" * 40)
             time.sleep(INTERVAL_S)
+
     except KeyboardInterrupt:
-        print("\nStop")
+        print("\nZatrzymano symulator.")
+    except Exception as e:
+        print(f"\nBłąd: {e}")
     finally:
         client.loop_stop()
         client.disconnect()

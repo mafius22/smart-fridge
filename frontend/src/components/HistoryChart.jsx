@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Search, RefreshCw } from 'lucide-react';
+import { Search, RefreshCw, BarChart2 } from 'lucide-react';
 
 export default function HistoryChart({ 
   data, 
@@ -9,10 +9,20 @@ export default function HistoryChart({
   onSearch, 
   isLoading, 
   visibility, 
-  setVisibility 
+  setVisibility,
+  selectedDeviceName 
 }) {
+
+
   return (
     <section className="chart-section">
+      <div className="chart-header">
+         <h2>
+            <BarChart2 size={20} /> 
+            Historia: <span className="highlight">{selectedDeviceName || 'Wybierz urządzenie'}</span>
+         </h2>
+      </div>
+
       <div className="chart-controls">
         <div className="date-inputs">
           <div className="input-group">
@@ -58,25 +68,66 @@ export default function HistoryChart({
         </div>
       </div>
 
-      <div className="chart-wrapper">
+      {/* WYMUSZONA WYSOKOŚĆ DLA TESTU */}
+      <div style={{ width: '100%', height: 400, minHeight: 400 }}>
         <ResponsiveContainer width="100%" height="100%">
           {data && data.length > 0 ? (
-            <LineChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="time" tick={{fontSize: 12}} />
-              <YAxis yAxisId="left" domain={['auto', 'auto']} hide={!visibility.showTemp} />
-              <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} hide={!visibility.showPress} />
-              <Tooltip labelFormatter={(label, payload) => payload && payload.length > 0 ? `Czas: ${payload[0].payload.fullDate}` : label} />
+            <LineChart data={data} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              
+              <XAxis 
+                dataKey="time" 
+                minTickGap={30}
+              />
+              
+              <YAxis 
+                yAxisId="left" 
+                hide={!visibility.showTemp}
+                domain={['auto', 'auto']} 
+              />
+              <YAxis 
+                yAxisId="right" 
+                orientation="right" 
+                hide={!visibility.showPress}
+                domain={['auto', 'auto']} 
+              />
+              
+              <Tooltip 
+                 labelFormatter={(val) => `Godzina: ${val}`}
+              />
               <Legend />
+              
               {visibility.showTemp && (
-                <Line yAxisId="left" type="monotone" dataKey="temp" stroke="#ef4444" strokeWidth={2} dot={false} name="Temp (°C)" animationDuration={500} />
+                <Line 
+                    yAxisId="left" 
+                    type="monotone" 
+                    dataKey="temp" 
+                    stroke="#ef4444" 
+                    strokeWidth={2} 
+                    dot={false} 
+                    name="Temperatura" 
+                    isAnimationActive={false} // Wyłącz animację dla testu
+                />
               )}
               {visibility.showPress && (
-                <Line yAxisId="right" type="monotone" dataKey="press" stroke="#3b82f6" strokeWidth={2} dot={false} name="Ciśnienie (hPa)" animationDuration={500} />
+                <Line 
+                    yAxisId="right" 
+                    type="monotone" 
+                    dataKey="press" 
+                    stroke="#3b82f6" 
+                    strokeWidth={2} 
+                    dot={false} 
+                    name="Ciśnienie" 
+                    isAnimationActive={false}
+                />
               )}
             </LineChart>
           ) : (
-            <div className="no-data-msg">Brak danych dla wybranego okresu lub błąd połączenia.</div>
+            <div className="no-data-msg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                {selectedDeviceName 
+                    ? `Brak danych dla ${selectedDeviceName} (Sprawdź konsolę F12)` 
+                    : "Wybierz urządzenie z listy po lewej."}
+            </div>
           )}
         </ResponsiveContainer>
       </div>

@@ -1,0 +1,27 @@
+menu "Konfiguracja MQTT (HiveMQ)"
+
+    config HIVE_MQTT_BROKER_URI
+        string "Adres Brokera MQTT"
+        default "..."
+        help
+            URI brokera. Dla HiveMQ Cloud użyj "mqtts://" i portu 8883.
+
+    config HIVE_MQTT_USERNAME
+        string "Użytkownik MQTT"
+        default "user"
+        help
+            Nazwa użytkownika stworzona w panelu HiveMQ Access Management.
+
+    config HIVE_MQTT_PASSWORD
+        string "Hasło MQTT"
+        default "password"
+        help
+            Hasło użytkownika.
+
+    config HIVE_MQTT_TOPIC
+        string "Topic"
+        default "ala/ma/kota"
+        help
+            Temat, pod którym ESP32 będzie publikować dane.
+
+endmenu

@@ -3,20 +3,37 @@ import os
 from datetime import datetime
 from app.services.subscriber_service import SubscriberService
 from app.services.measurement_service import MeasurementService
+from app.models.measurement import Device
 
 api_bp = Blueprint('api', __name__)
 
 # --- STATUS I KLUCZ VAPID ---
 @api_bp.route('/status', methods=['GET'])
 def get_status():
-    """Zwraca ostatni pomiar + klucz VAPID"""
-    last_measurement = MeasurementService.get_latest_measurement()
+    """
+    Zwraca listę WSZYSTKICH urządzeń wraz z ich ostatnim pomiarem
+    oraz klucz VAPID.
+    """
+    # 1. Pobieramy wszystkie zarejestrowane urządzenia
+    devices = Device.query.all()
     
-    data = last_measurement.to_dict() if last_measurement else None
+    devices_data = []
+    
+    for dev in devices:
+        # 2. Dla każdego urządzenia pobieramy ostatni pomiar
+        # (Musimy upewnić się, że MeasurementService ma taką metodę - patrz niżej)
+        last_meas = MeasurementService.get_latest_for_device(dev.id)
+        
+        devices_data.append({
+            "device_id": dev.id,
+            "name": dev.name,
+            "location": dev.location,
+            "last_reading": last_meas.to_dict() if last_meas else None
+        })
 
     return jsonify({
         "vapid_public_key": os.getenv("VAPID_PUBLIC_KEY"),
-        "data": data
+        "devices": devices_data  # Teraz zwracamy listę urządzeń
     })
 
 # --- ZARZĄDZANIE SUBSKRYPCJAMI ---
@@ -42,18 +59,13 @@ def subscribe():
         auth=keys['auth']
     )
 
-    response = {
-        "success": success,
-        "message": message
-    }
-    return jsonify(response), status_code
+    return jsonify({"success": success, "message": message}), status_code
 
 
 @api_bp.route('/subscribe', methods=['PUT'])
 def update_subscription():
     """Aktualizuje ustawienia istniejącej subskrypcji"""
     data = request.json
-    
     if 'endpoint' not in data:
         return jsonify({"error": "Brak endpointu identyfikującego"}), 400
 
@@ -70,20 +82,13 @@ def update_subscription():
 
 @api_bp.route('/subscribe', methods=['GET'])
 def get_subscription_settings():
-    """
-    Pobiera ustawienia dla konkretnego użytkownika.
-    Oczekuje parametru w URL: ?endpoint=...
-    """
     endpoint = request.args.get('endpoint')
-    
     if not endpoint:
         return jsonify({"error": "Brak parametru 'endpoint'"}), 400
 
     subscriber_data = SubscriberService.get_settings_by_endpoint(endpoint)
-
     if subscriber_data:
         return jsonify(subscriber_data), 200
-    
     return jsonify({"error": "Nie znaleziono subskrypcji"}), 404
 
 
@@ -91,23 +96,37 @@ def get_subscription_settings():
 
 @api_bp.route('/measurements', methods=['GET'])
 def get_measurements_history():
+    """
+    Pobiera historię. 
+    Obsługuje filtry: start, end ORAZ device_id (opcjonalnie)
+    """
     start_str = request.args.get('start')
     end_str = request.args.get('end')
+    device_id = request.args.get('device_id')  # <--- Nowy parametr
 
     if not start_str or not end_str:
         return jsonify({"error": "Podaj parametry 'start' i 'end' (format YYYY-MM-DD)"}), 400
 
     try:
+        # Obsługa daty z czasem lub samej daty
+        # Jeśli przyjdzie "2024-01-01", dodajemy godziny dla pewności
+        if len(start_str) == 10: start_str += "T00:00:00"
+        if len(end_str) == 10: end_str += "T23:59:59"
+
         start_date = datetime.fromisoformat(start_str)
         end_date = datetime.fromisoformat(end_str)
 
-        measurements = MeasurementService.get_measurements_in_range(start_date, end_date)
+        # Przekazujemy device_id do serwisu
+        measurements = MeasurementService.get_measurements_in_range(
+            start_date, end_date, device_id
+        )
 
         data = [m.to_dict() for m in measurements]
 
         return jsonify({
             "count": len(data),
             "range": {"start": start_str, "end": end_str},
+            "device_filter": device_id if device_id else "ALL",
             "data": data
         })
 
