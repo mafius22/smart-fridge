@@ -83,6 +83,17 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  padding: 15px;
+  border-radius: 20px;
+  border: solid 2px var(--primary);
+
+  /* Ograniczenie do wysokości ekranu (np. minus nagłówek) */
+  max-height: 79vh; /* Lub np. calc(100vh - 100px) jeśli masz nagłówek */
+  overflow-y: auto;  /* Włącza przewijanie */
+}
+
+.stats-section.device-list::-webkit-scrollbar {
+  display: none;
 }
 
 .stat-card.device-card {
@@ -110,7 +121,7 @@ body {
 }
 
 .stat-card.warning {
-  border-color: var(--primary);
+  border-color: var(--danger);
   background: #ffffff;
 }
 
@@ -272,7 +283,6 @@ body {
 
 .footer {
   margin-top: auto;
-  padding-top: 40px;
   text-align: center;
   color: var(--text-muted);
   font-size: 0.85rem;

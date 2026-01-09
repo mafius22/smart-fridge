@@ -226,7 +226,7 @@ const fetchHistory = useCallback(async () => {
 
       </main>
 
-      <footer className="footer">System IoT v3.0 Multi-Device</footer>
+      <footer className="footer">System IoT</footer>
     </div>
   );
 }
