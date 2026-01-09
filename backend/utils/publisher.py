@@ -27,7 +27,7 @@ def make_payload(device_name) -> dict:
     if "zamrazarka" in device_name:
         temp = round(random.uniform(-25.0, -15.0), 1) # Mroźno
     else:
-        temp = round(random.uniform(2.0, 8.0), 1)     # Chłodno
+        temp = round(random.uniform(8.0, 10.0), 1)     # Chłodno
         
     press = random.randint(98000, 103000)
     return {"ts": unix_ts(), "temp": temp, "press": press}

@@ -3,7 +3,6 @@ import json
 import logging
 import time
 import paho.mqtt.client as mqtt
-# Importujemy funkcje do bezpośredniego zapisu z worker.py
 from app.services.worker import save_measurement_direct, preload_cache
 
 logger = logging.getLogger(__name__)
@@ -11,10 +10,8 @@ logger = logging.getLogger(__name__)
 def start_mqtt_client(app):
     broker = os.getenv("MQTT_BROKER", "127.0.0.1")
     port = int(os.getenv("MQTT_PORT", 1883))
-    # Temat z "wildcardem" (+) do łapania ID urządzenia z tematu
     topic = os.getenv("MQTT_TOPIC", "esp32/smartfridge/+/data")
 
-    # 1. Wczytujemy cache urządzeń (optymalizacja)
     preload_cache(app)
 
     def on_connect(client, userdata, flags, rc, properties=None):
@@ -48,8 +45,6 @@ def start_mqtt_client(app):
             payload = msg.payload.decode()
             data = json.loads(payload)
             
-            # Tworzymy słownik danych zgodny z worker.py
-            # Jeśli timestamp nie przyszedł z ESP, bierzemy czas serwera
             ts = int(data.get("ts", time.time()))
 
             item = {
@@ -59,7 +54,6 @@ def start_mqtt_client(app):
                 'press': float(data.get("press", 0))
             }
 
-            # BEZPOŚREDNI ZAPIS (zamiast kolejki)
             save_measurement_direct(application, item)
 
         except json.JSONDecodeError:
@@ -67,8 +61,6 @@ def start_mqtt_client(app):
         except Exception as e:
             logger.error(f"Błąd przetwarzania wiadomości MQTT: {e}")
 
-    # Konfiguracja klienta MQTT
-    # Obsługa nowej wersji API Paho (jeśli zainstalowana), fallback do starej
     try:
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     except AttributeError:
@@ -78,13 +70,11 @@ def start_mqtt_client(app):
     # Przy localhost i zwykłym Mosquitto to blokuje połączenie!
     client.tls_set()
         
-    # Logowanie (opcjonalne)
     user = os.getenv("MQTT_LOGIN")
     passwd = os.getenv("MQTT_PASS")
     if user and passwd:
         client.username_pw_set(user, passwd)
 
-    # Przekazujemy 'app' do callbacków
     client.user_data_set(app)
     
     client.on_connect = on_connect

@@ -4,7 +4,7 @@ import { LayoutDashboard } from 'lucide-react';
 import { format, subHours } from 'date-fns';
 import './App.css';
 
-// Zmieniliśmy nazwę CurrentStats na DeviceList, bo teraz to lista
+// Komponenty
 import DeviceList from './components/DeviceList'; 
 import HistoryChart from './components/HistoryChart';
 import NotificationSettings from './components/NotificationSettings';
@@ -18,6 +18,7 @@ const apiClient = axios.create({
   }
 });
 
+// Pomocnicza funkcja do klucza VAPID
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -27,173 +28,236 @@ function urlBase64ToUint8Array(base64String) {
 
 function App() {
   // --- STATE ---
-  const [devices, setDevices] = useState([]); // Lista urządzeń
-  const [selectedDeviceId, setSelectedDeviceId] = useState(null); // Aktualnie wybrany do wykresu
-
+  
+  // 1. Dane podstawowe
+  const [devices, setDevices] = useState([]); // Lista urządzeń online (z /status)
+  const [serverRules, setServerRules] = useState([]); // <--- KLUCZOWE: Surowe reguły pobrane z bazy (z /subscribe)
+  
+  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
   const [historyData, setHistoryData] = useState([]);
   const [vapidKey, setVapidKey] = useState(null);
   
+  // 2. Filtry i Wykresy
   const [dateRange, setDateRange] = useState({
     start: format(subHours(new Date(), 24), "yyyy-MM-dd'T'HH:mm"),
     end: format(new Date(), "yyyy-MM-dd'T'HH:mm")
   });
-  
   const [visibility, setVisibility] = useState({ showTemp: true, showPress: true });
+  
+  // 3. Subskrypcja i Użytkownik
   const [userEndpoint, setUserEndpoint] = useState(null);
-  const [settings, setSettings] = useState({ isActive: true, threshold: 8.0 });
   const [isSubscribedBrowser, setIsSubscribedBrowser] = useState(false);
+  
+  // 4. Ustawienia (Scalone: urządzenia + reguły)
+  const [settings, setSettings] = useState({ 
+    isActive: true, 
+    devices: [] 
+  });
+
   const [status, setStatus] = useState({ type: 'info', msg: 'Łączenie...' });
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // --- 1. POBIERANIE STANU (URZĄDZENIA) ---
-const fetchStatus = async () => {
+  // --- LOGIKA 1: POBIERANIE STATUSU (URZĄDZENIA) ---
+  const fetchStatus = async () => {
     try {
       const res = await apiClient.get('/status');
       if (res.data.devices) {
-        setDevices(res.data.devices);
-        // TU JUŻ NIE USTAWIAMY selectedDeviceId
+        // Sortujemy alfabetycznie po ID, żeby nie skakały na liście
+        const sorted = res.data.devices.sort((a, b) => a.device_id.localeCompare(b.device_id));
+        setDevices(sorted);
       }
       if (res.data.vapid_public_key) setVapidKey(res.data.vapid_public_key);
     } catch (e) { console.error("Polling error", e); }
   };
 
-  // Pętla odświeżania (bez zmian)
+  // Uruchomienie pętli pobierania statusu co 5 sekund
   useEffect(() => {
     fetchStatus();
     const interval = setInterval(fetchStatus, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  // --- NOWY: INTELIGENTNY AUTO-WYBÓR ---
+  // Automatyczne wybranie pierwszego urządzenia po załadowaniu
   useEffect(() => {
-    // Jeśli lista urządzeń przyszła, a my nic nie mamy zaznaczonego -> zaznacz pierwsze
     if (devices.length > 0 && selectedDeviceId === null) {
       setSelectedDeviceId(devices[0].device_id);
     }
   }, [devices, selectedDeviceId]);
 
-  useEffect(() => {
-    fetchStatus();
-    // Odświeżaj status co 5 sekund
-    const interval = setInterval(fetchStatus, 5000);
-    return () => clearInterval(interval);
-  }, []); // Wywołaj tylko raz przy montowaniu (plus interwał)
 
-  // --- 2. INICJALIZACJA SUBSKRYPCJI (Service Worker) ---
+  // --- LOGIKA 2: SCALANIE DANYCH (MÓZG APLIKACJI) ---
+  // Ten useEffect uruchamia się, gdy przyjdą nowe urządzenia z ESP LUB nowe reguły z Bazy
+  useEffect(() => {
+    if (devices.length === 0) return;
+
+    const mergedDevices = devices.map(device => {
+        // Szukamy, czy w danych z bazy (serverRules) jest wpis dla tego urządzenia
+        const rule = serverRules.find(r => r.device_id === device.device_id);
+        
+        return {
+            device_id: device.device_id,
+            device_name: device.name || device.device_id,
+            // Jeśli znaleziono regułę w bazie, użyj jej wartości. Jeśli nie - pusty string.
+            // Używamy 'custom_threshold' zgodnie z Twoim kodem Python.
+            custom_threshold: rule ? rule.custom_threshold : '' 
+        };
+    });
+
+    setSettings(prev => ({
+        ...prev,
+        devices: mergedDevices
+    }));
+
+  }, [devices, serverRules]); // Zależy od obu źródeł danych
+
+
+  // --- LOGIKA 3: INICJALIZACJA SERVICE WORKER I POBRANIE PROFILU ---
   useEffect(() => {
     const initSW = async () => {
         if ('serviceWorker' in navigator) {
             try { await navigator.serviceWorker.register('/sw.js'); } catch (e) { console.error(e); }
+            
             const reg = await navigator.serviceWorker.ready;
             const sub = await reg.pushManager.getSubscription();
+            
             if (sub) {
               setUserEndpoint(sub.endpoint);
               setIsSubscribedBrowser(true);
+              
+              // Pobieramy ustawienia z backendu
               try {
                 const res = await apiClient.get('/subscribe', { params: { endpoint: sub.endpoint } });
-                setSettings({ 
-                  isActive: res.data.is_active ?? true, 
-                  threshold: res.data.custom_threshold ?? 8.0 
-                });
-                setStatus({ type: 'success', msg: 'System gotowy' });
-              } catch (err) { console.warn("Brak profilu", err); }
+                
+                // A. Ustawiamy flagę globalną (Włącz/Wyłącz)
+                setSettings(prev => ({ ...prev, isActive: res.data.is_active ?? true }));
+                
+                // B. Zapisujemy SUROWE reguły do osobnego stanu
+                // Python zwraca: { is_active: ..., devices: [ {device_id, custom_threshold}, ... ] }
+                if (res.data.devices) {
+                    setServerRules(res.data.devices);
+                }
+
+              } catch (err) { console.warn("Brak profilu w bazie lub błąd sieci", err); }
             }
         }
     };
     initSW();
   }, []);
 
-  // --- 3. HISTORIA (ZALEŻNA OD WYBRANEGO DEVICE_ID) ---
-const fetchHistory = useCallback(async () => {
-    if (!selectedDeviceId) return;
+  // --- LOGIKA 4: ZAPISYWANIE USTAWIEŃ ---
+// --- 4. ZAPISYWANIE USTAWIEŃ (ZAKTUALIZOWANE) ---
+  // Teraz funkcja przyjmuje opcjonalny argument 'devicesToSave'
+  const saveSettings = async (devicesToSave) => {
+    if (!userEndpoint) return alert("Brak endpointu subskrypcji.");
+    
+    // Jeśli nie przekazano konkretnych urządzeń, weź te ze stanu (zabezpieczenie)
+    const devicesList = devicesToSave || settings.devices;
 
+    setStatus({ type: 'info', msg: 'Zapisywanie...' });
+
+    try {
+      const promises = [];
+      
+      if (devicesList && devicesList.length > 0) {
+        devicesList.forEach(device => {
+            const payload = {
+                endpoint: userEndpoint,
+                device_id: device.device_id,
+                is_active: settings.isActive, 
+                custom_threshold: (device.custom_threshold === '' || device.custom_threshold === null) 
+                    ? null 
+                    : parseFloat(device.custom_threshold)
+            };
+            promises.push(apiClient.put('/subscribe', payload));
+        });
+      }
+
+      await Promise.all(promises);
+      
+      // Aktualizujemy lokalny stan w App.js, żeby UI od razu pokazał nowe wartości
+      setServerRules(devicesList.map(d => ({
+          device_id: d.device_id,
+          custom_threshold: d.custom_threshold
+      })));
+      
+      // Aktualizujemy też główny settings, żeby nie mrugnęło starą wartością
+      setSettings(prev => ({ ...prev, devices: devicesList }));
+
+      setStatus({ type: 'success', msg: 'Zapisano ustawienia!' });
+      
+    } catch (error) { 
+      console.error("Save error:", error);
+      setStatus({ type: 'error', msg: 'Błąd zapisu.' }); 
+    }
+  };
+
+  // --- LOGIKA 5: SUBSKRYPCJA (Browser) ---
+  const handleSubscribe = async () => {
+    if (!vapidKey) return alert("Brak klucza VAPID.");
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') throw new Error("Brak zgody na powiadomienia.");
+      
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ 
+        userVisibleOnly: true, 
+        applicationServerKey: urlBase64ToUint8Array(vapidKey) 
+      });
+      
+      await apiClient.post('/subscribe', { endpoint: sub.endpoint, keys: sub.toJSON().keys });
+      setUserEndpoint(sub.endpoint);
+      setIsSubscribedBrowser(true);
+      setStatus({ type: 'success', msg: 'Zarejestrowano!' });
+      
+      // Po rejestracji ustawiamy domyślny stan
+      setSettings(prev => ({ ...prev, isActive: true }));
+      
+    } catch (error) { alert(error.message); }
+  };
+
+  // --- LOGIKA 6: HISTORIA I WYKRESY ---
+  const fetchHistory = useCallback(async () => {
+    if (!selectedDeviceId) return;
     setLoadingHistory(true);
     try {
-      // Formatowanie daty do zapytania (to zostaje po staremu)
       const startStr = format(new Date(dateRange.start), "yyyy-MM-dd'T'HH:mm:ss");
       const endStr = format(new Date(dateRange.end), "yyyy-MM-dd'T'HH:mm:ss");
       
       const res = await apiClient.get('/measurements', { 
-        params: { 
-            start: startStr, 
-            end: endStr,
-            device_id: selectedDeviceId 
-        } 
+        params: { start: startStr, end: endStr, device_id: selectedDeviceId } 
       });
       
       const rawData = res.data.data || [];
-      
-      // --- TUTAJ JEST KLUCZOWA ZMIANA ---
       const formatted = rawData.map(item => ({
-        // Backend: "time" -> Frontend bierze: item.time
         time: item.time ? format(new Date(item.time), 'HH:mm') : '--:--',
         fullDate: item.time,
-
-        // Backend: "temp" -> Frontend bierze: item.temp
         temp: item.temp,
-
-        // Backend: "press" -> Frontend bierze: item.press
-        // UWAGA: Jeśli w bazie masz hPa (np. 1013), zostaw tak jak poniżej.
-        // Jeśli masz Pascale (np. 101300), dopisz dzielenie: (item.press / 100)
         press: item.press ? Number(item.press).toFixed(0) : 0
       }));
       
       setHistoryData(formatted);
-      setStatus({ type: 'success', msg: `Pobrano dane: ${formatted.length} pkt` });
-
+      setStatus({ type: 'success', msg: `Dane odświeżone` });
     } catch (error) {
       console.error(error);
-      setStatus({ type: 'error', msg: 'Błąd historii' });
       setHistoryData([]); 
     } finally {
       setLoadingHistory(false);
     }
   }, [dateRange, selectedDeviceId]);
 
-  // Pobierz historię, gdy zmieni się data lub wybrane urządzenie
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
-  // --- LOGIKA SUBSKRYPCJI (BEZ ZMIAN) ---
-  const handleSubscribe = async () => {
-    if (!vapidKey) return alert("Błąd: Brak klucza VAPID.");
-    try {
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') throw new Error("Brak zgody.");
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.subscribe({ 
-        userVisibleOnly: true, 
-        applicationServerKey: urlBase64ToUint8Array(vapidKey) 
-      });
-      await apiClient.post('/subscribe', { endpoint: sub.endpoint, keys: sub.toJSON().keys });
-      setUserEndpoint(sub.endpoint);
-      setIsSubscribedBrowser(true);
-      setStatus({ type: 'success', msg: 'Powiadomienia włączone!' });
-    } catch (error) { alert(error.message); }
-  };
-
-  const saveSettings = async () => {
-    if (!userEndpoint) return alert("Brak subskrypcji.");
-    try {
-      await apiClient.put('/subscribe', { 
-        endpoint: userEndpoint, 
-        is_active: settings.isActive, 
-        custom_threshold: parseFloat(settings.threshold) 
-      });
-      setStatus({ type: 'success', msg: 'Zapisano ustawienia!' });
-    } catch (error) { setStatus({ type: 'error', msg: 'Błąd zapisu.' }); }
-  };
-
+  // --- RENDER (Widok) ---
   return (
     <div className="app-container">
       <header className="header">
         <div className="logo">
           <LayoutDashboard size={28} />
-          <h1>Smart Fridge Manager</h1>
+          <h1>Smart Fridge</h1>
         </div>
         
         <div className={`status-badge ${status.type}`}>{status.msg}</div>
         
-        {/* Ustawienia */}
         <NotificationSettings 
           isSubscribed={isSubscribedBrowser}
           settings={settings}
@@ -204,15 +268,13 @@ const fetchHistory = useCallback(async () => {
       </header>
 
       <main className="dashboard-grid">
-        {/* Lista Urządzeń (zamiast CurrentStats) */}
         <DeviceList 
           devices={devices} 
           selectedId={selectedDeviceId}
           onSelect={setSelectedDeviceId}
-          threshold={settings.threshold}
+          threshold={settings.devices.find(d => d.device_id === selectedDeviceId)?.custom_threshold}
         />
 
-        {/* Wykres */}
         <HistoryChart 
           data={historyData}
           dateRange={dateRange}
@@ -223,10 +285,9 @@ const fetchHistory = useCallback(async () => {
           setVisibility={setVisibility}
           selectedDeviceName={devices.find(d => d.device_id === selectedDeviceId)?.name || selectedDeviceId}
         />
-
       </main>
 
-      <footer className="footer">System IoT</footer>
+      <footer className="footer">IoT System v2.2</footer>
     </div>
   );
 }

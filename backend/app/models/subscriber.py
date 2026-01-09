@@ -1,4 +1,4 @@
-from app import db
+from app.extensions import db
 
 class PushSubscriber(db.Model):
     __tablename__ = 'subscribers'
@@ -8,4 +8,6 @@ class PushSubscriber(db.Model):
     p256dh = db.Column(db.String(255), nullable=False)
     auth = db.Column(db.String(255), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
-    custom_threshold = db.Column(db.Float, default=8.0)
+    
+    # Relacja do settings
+    device_settings = db.relationship('SubscriberDeviceSettings', back_populates='subscriber', cascade="all, delete-orphan")

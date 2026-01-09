@@ -1,74 +1,96 @@
-from app import db
-from app.models.subscriber import PushSubscriber
-from sqlalchemy.exc import SQLAlchemyError
+from app.extensions import db
+from app.models import PushSubscriber, Device, SubscriberDeviceSettings
 
 class SubscriberService:
+    
     @staticmethod
     def register_new_subscriber(endpoint, p256dh, auth):
-        """
-        Logika biznesowa: Sprawdza duplikat, zapisuje w bazie.
-        Zwraca: (success: bool, message: str, status_code: int)
-        """
-        try:
-            exists = PushSubscriber.query.filter_by(endpoint=endpoint).first()
-            
-            if exists:
-                return True, "Użytkownik już zapisany", 200
-
-            new_sub = PushSubscriber(
-                endpoint=endpoint,
-                p256dh=p256dh,
-                auth=auth
-            )
-            
-            db.session.add(new_sub)
+        """Rejestruje nowego subskrybenta i przypisuje mu wszystkie istniejące urządzenia."""
+        existing = PushSubscriber.query.filter_by(endpoint=endpoint).first()
+        if existing:
+            # Aktualizujemy klucze jeśli się zmieniły
+            existing.p256dh = p256dh
+            existing.auth = auth
+            existing.is_active = True
             db.session.commit()
-            
-            return True, "Zapisano pomyślnie", 201
+            return True, "Zaktualizowano subskrypcję", 200
 
-        except SQLAlchemyError as e:
-            db.session.rollback()
-            return False, f"Błąd bazy danych: {str(e)}", 500
-        except Exception as e:
-            return False, f"Nieoczekiwany błąd: {str(e)}", 500
-    
-    
-    @staticmethod
-    def update_subscriber_settings(endpoint, is_active, threshold):
-        """
-        Aktualizuje ustawienia subskrybenta.
-        """
-        sub = PushSubscriber.query.filter_by(endpoint=endpoint).first()
+        # Tworzymy nowego usera
+        new_sub = PushSubscriber(
+            endpoint=endpoint,
+            p256dh=p256dh,
+            auth=auth,
+            is_active=True
+        )
+        db.session.add(new_sub)
+        db.session.flush()  # Nadaje ID nowemu obiektowi przed commitem
+
+        # --- PRZYPISANIE ISTNIEJĄCYCH URZĄDZEŃ ---
+        existing_devices = Device.query.all()
+        DEFAULT_THRESHOLD = 8.0
+
+        for dev in existing_devices:
+            settings = SubscriberDeviceSettings(
+                subscriber_id=new_sub.id,
+                device_id=dev.id,
+                custom_threshold=DEFAULT_THRESHOLD
+            )
+            db.session.add(settings)
         
+        db.session.commit()
+        return True, "Zarejestrowano pomyślnie", 201
+
+    @staticmethod
+    def update_subscriber_settings(endpoint, is_active=None, threshold=None, device_id=None):
+        """Aktualizuje ustawienia globalne lub per urządzenie."""
+        sub = PushSubscriber.query.filter_by(endpoint=endpoint).first()
         if not sub:
             return False, "Nie znaleziono subskrybenta"
 
-        try:
-            # Aktualizujemy pola tylko jeśli podano nowe wartości
-            if is_active is not None:
-                sub.is_active = is_active
-            if threshold is not None:
-                sub.custom_threshold = threshold
+        # 1. Aktualizacja globalna (włącz/wyłącz powiadomienia w ogóle)
+        if is_active is not None:
+            sub.is_active = is_active
+
+        # 2. Aktualizacja per urządzenie (zmiana progu)
+        if device_id and threshold is not None:
+            # Szukamy ustawień dla tego konkretnego urządzenia
+            settings = SubscriberDeviceSettings.query.filter_by(
+                subscriber_id=sub.id, 
+                device_id=device_id
+            ).first()
             
-            db.session.commit()
-            return True, "Zaktualizowano ustawienia"
-            
-        except Exception as e:
-            db.session.rollback()
-            return False, str(e)
-        
+            if settings:
+                settings.custom_threshold = float(threshold)
+            else:
+                # Jeśli z jakiegoś powodu brak ustawień, tworzymy je
+                new_settings = SubscriberDeviceSettings(
+                    subscriber_id=sub.id,
+                    device_id=device_id,
+                    custom_threshold=float(threshold)
+                )
+                db.session.add(new_settings)
+
+        db.session.commit()
+        return True, "Zaktualizowano ustawienia"
 
     @staticmethod
     def get_settings_by_endpoint(endpoint):
-        try:
-            sub = PushSubscriber.query.filter_by(endpoint=endpoint).first()
-            
-            if sub:
-                return {
-                    "is_active": sub.is_active,
-                    "custom_threshold": sub.custom_threshold
-                }
+        """Pobiera ustawienia globalne i listę urządzeń z progami."""
+        sub = PushSubscriber.query.filter_by(endpoint=endpoint).first()
+        if not sub:
             return None
-        except Exception as e:
-            print(f"Błąd pobierania ustawień: {e}")
-            return None
+
+        # Pobieramy ustawienia dla urządzeń
+        devices_settings = []
+        for setting in sub.device_settings:
+            # setting.device to relacja do obiektu Device
+            devices_settings.append({
+                "device_id": setting.device.id,
+                "device_name": setting.device.name,
+                "custom_threshold": setting.custom_threshold
+            })
+
+        return {
+            "is_active": sub.is_active,
+            "devices": devices_settings
+        }

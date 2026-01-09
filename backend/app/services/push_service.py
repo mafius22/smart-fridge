@@ -2,16 +2,19 @@ import os
 import json
 import logging
 from pywebpush import webpush, WebPushException
-from app import db
-from app.models.subscriber import PushSubscriber
+from app.extensions import db
+from app.models import PushSubscriber, SubscriberDeviceSettings
 
-# Setup loggera
 logger = logging.getLogger(__name__)
 
-def send_alert(temperature, device, app):
+def send_alert(temperature, device_obj, app):
     """
-    Wysyła powiadomienie do tych subskrybentów którzy maja wlaczone powiadomienia i temperatura jest wyzsza od ich progu.
-    Wymaga przekazania 'app', aby wejść w kontekst bazy danych.
+    Wysyła powiadomienie push.
+    
+    Logika:
+    1. Znajduje subskrybentów przypisanych do TEGO urządzenia (device_obj).
+    2. Sprawdza, czy subskrybent jest globalnie aktywny.
+    3. Sprawdza, czy aktualna temperatura > custom_threshold subskrybenta dla tego urządzenia.
     """
     vapid_private = os.getenv("VAPID_PRIVATE_KEY")
     vapid_email = os.getenv("VAPID_EMAIL")
@@ -21,37 +24,49 @@ def send_alert(temperature, device, app):
         return
 
     with app.app_context():
-        subscribers = PushSubscriber.query.all()
+        # Łączymy PushSubscriber z SubscriberDeviceSettings
+        # Szukamy par (Subskrybent, Ustawienia), które spełniają warunki alarmu
+        alerts_to_send = db.session.query(PushSubscriber, SubscriberDeviceSettings)\
+            .join(SubscriberDeviceSettings, PushSubscriber.id == SubscriberDeviceSettings.subscriber_id)\
+            .filter(SubscriberDeviceSettings.device_id == device_obj.id)\
+            .filter(PushSubscriber.is_active == True)\
+            .filter(SubscriberDeviceSettings.custom_threshold < temperature)\
+            .all()
         
-        if not subscribers:
+        if not alerts_to_send:
+            # To normalne - nikt nie ma tak niskiego progu lub wszyscy wyłączyli powiadomienia
             return
 
-        payload = json.dumps({
-            "title": "ALARM TEMPERATURY! 🔥",
-            "body": f"Temperatura wzrosła do {temperature}°C! w lodówce: {device}",
-            "icon": "/vite.svg" # Ikona, którą masz we frontendzie
-        })
+        logger.info(f"ALARM: Wysyłanie powiadomień do {len(alerts_to_send)} użytkowników dla {device_obj.name}.")
 
-        for sub in subscribers:
-            if sub.is_active and sub.custom_threshold < temperature:
+        for sub, settings in alerts_to_send:
+            
+            payload = json.dumps({
+                "title": f"ALARM: {device_obj.name} 🔥",
+                "body": f"Temperatura: {temperature}°C (Twój limit: {settings.custom_threshold}°C)",
+                "icon": "/vite.svg",
+                "data": {
+                    "url": f"/devices/{device_obj.id}" 
+                }
+            })
 
-                try:
-                    webpush(
-                        subscription_info={
-                            "endpoint": sub.endpoint,
-                            "keys": {"p256dh": sub.p256dh, "auth": sub.auth}
-                        },
-                        data=payload,
-                        vapid_private_key=vapid_private,
-                        vapid_claims={"sub": vapid_email},
-                        ttl=86400,            # Ważność: 24h
-                        headers={"Urgency": "high"}
-                    )
-                except WebPushException as ex:
-                    if ex.response and ex.response.status_code == 410:
-                        logger.info(f"Usuwanie nieaktywnego subskrybenta: {sub.id}")
-                        db.session.delete(sub)
-                    else:
-                        logger.error(f"Błąd Push: {ex}")
-        
+            try:
+                webpush(
+                    subscription_info={
+                        "endpoint": sub.endpoint,
+                        "keys": {"p256dh": sub.p256dh, "auth": sub.auth}
+                    },
+                    data=payload,
+                    vapid_private_key=vapid_private,
+                    vapid_claims={"sub": vapid_email},
+                    ttl=43200,          # 12h ważności
+                    headers={"Urgency": "high"}
+                )
+            except WebPushException as ex:
+                if ex.response and ex.response.status_code == 410:
+                    logger.info(f"Usuwanie martwej subskrypcji: {sub.id}")
+                    db.session.delete(sub) # Usunie też settings kaskadowo
+                else:
+                    logger.error(f"Błąd WebPush dla {sub.id}: {ex}")
+
         db.session.commit()

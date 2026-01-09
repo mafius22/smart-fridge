@@ -1,18 +1,18 @@
 import logging
 from sqlalchemy import insert
 from sqlalchemy.exc import IntegrityError
-from app import db
-
-from app.models.measurement import Measurement, Device 
+from app.extensions import db
+from app.models import Device, Measurement
 from app.services.push_service import send_alert
+from app.services.measurement_service import _get_or_create_device 
 
 logger = logging.getLogger(__name__)
 
-# RAM CACHE - Nadal przydatny, by nie pytać bazy o ID urządzenia przy każdym zapisie
+# RAM CACHE
 known_devices_cache = set()
 
 def preload_cache(app):
-    """Wczytuje istniejące urządzenia do RAM. Wywołaj to raz przy starcie aplikacji."""
+    """Wczytuje istniejące urządzenia do RAM."""
     with app.app_context():
         try:
             devices = db.session.query(Device.id).all()
@@ -22,46 +22,18 @@ def preload_cache(app):
         except Exception as e:
             logger.warning(f"Nie udało się załadować cache urządzeń: {e}")
 
-def _get_or_create_device(app, device_id):
-    """Sprawdza RAM -> DB -> Tworzy nowe urządzenie (Auto-Provisioning)"""
-    if device_id in known_devices_cache:
-        return
-
-    with app.app_context():
-        # Sprawdzamy w bazie
-        device = db.session.get(Device, device_id)
-        if device:
-            known_devices_cache.add(device_id)
-            return
-
-        # Tworzymy nowe
-        try:
-            logger.info(f"🆕 Wykryto nowe urządzenie: {device_id} - Rejestracja...")
-            new_dev = Device(
-                id=device_id,
-                name=f"{device_id}",
-                location="Do ustawienia"
-            )
-            db.session.add(new_dev)
-            db.session.commit()
-            known_devices_cache.add(device_id)
-        except IntegrityError:
-            db.session.rollback()
-            known_devices_cache.add(device_id)
-        except Exception as e:
-            logger.error(f"Błąd tworzenia urządzenia {device_id}: {e}")
 
 def save_measurement_direct(app, item):
     """
-    Zapisuje pomiar natychmiastowo (bez kolejki).
-    Wymaga przekazania obiektu 'app' dla kontekstu bazy danych.
+    Zapisuje pomiar i uruchamia sprawdzanie alertów dla konkretnych subskrybentów.
     """
     try:
-        # 1. Auto-Discovery (czy urządzenie istnieje?)
+        # 1. Auto-Discovery (czy urządzenie istnieje w tabeli Devices?)
         _get_or_create_device(app, item['dev'])
 
-        # 2. Bezpośredni zapis do bazy
+        # 2. Bezpośredni zapis do bazy + Alerting
         with app.app_context():
+            # A. Zapis pomiaru
             stmt = insert(Measurement).values(
                 device_id=item['dev'],
                 esp_timestamp=item['ts'],
@@ -69,12 +41,22 @@ def save_measurement_direct(app, item):
                 pressure=item['press']
             )
             db.session.execute(stmt)
+            
+            # B. Pobranie OBIEKTU urządzenia
+            # Musimy to zrobić w tej samej sesji, żeby przekazać obiekt do send_alert
+            # item['dev'] to string (np. "esp32_01"), a my potrzebujemy obiektu Device
+            device_obj = db.session.get(Device, item['dev'])
+            
             db.session.commit()
             
-            print(f"[{item['dev']}] Zapisano bezpośrednio: {item['temp']}°C")
+            print(f"[{item['dev']}] Zapisano: {item['temp']}°C")
 
-            # 3. Sprawdzenie alertów (synchronicznie)
-            send_alert(item['temp'], item['dev'], app)
+            # 3. Sprawdzenie alertów
+            # Przekazujemy teraz device_obj (obiekt SQLAlchem), a nie stringa
+            if device_obj:
+                send_alert(item['temp'], device_obj, app)
+            else:
+                logger.warning(f"Nie znaleziono urządzenia {item['dev']} podczas wysyłania alertu")
 
     except Exception as e:
         logger.error(f"Błąd zapisu bezpośredniego: {e}")
