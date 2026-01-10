@@ -26,8 +26,7 @@ System zaprojektowano w architekturze mikrousługowej:
 * **MCU:** ESP32
 * **Framework:** ESP-IDF (C/C++), FreeRTOS
 * **Czujniki:**
-    * *Prototyp:* BMP180 (I2C) - obecna faza
-    * *Produkcja:* DS18B20 (1-Wire, wodoodporny)
+    * *Produkcja:* DS18B20
 
 ### Backend (`/backend`)
 * **Język:** Python 3.10+
