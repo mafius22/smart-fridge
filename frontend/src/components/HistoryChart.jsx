@@ -52,7 +52,7 @@ export default function HistoryChart({
       </div>
 
       {/* Kontener o stałej wysokości */}
-      <div style={{ width: '100%', height: 400, minHeight: 400, position: 'relative' }}>
+      <div style={{ width: '100%', height: 400, minHeight: 400, position: 'relative'}}>
         
         {hasData ? (
           <ResponsiveContainer width="100%" height="100%">
@@ -66,9 +66,10 @@ export default function HistoryChart({
               
               {/* Tylko jedna oś Y dla temperatury */}
               <YAxis 
-                domain={['auto', 'auto']} 
-                unit="°C"
-              />
+                    domain={['auto', 'auto']} 
+                    unit="°C" 
+                    tickFormatter={(value) => value.toFixed(1)} 
+                />
               
               <Tooltip 
                  labelFormatter={(val) => `Godzina: ${val}`}

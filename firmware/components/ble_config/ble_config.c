@@ -23,7 +23,7 @@ static const char *TAG = "BLE_CONFIG";
 // --- KONFIGURACJA ---
 #define DEVICE_NAME             "ESP32_SMART_FRIDGE"
 #define BUTTON_HOLD_TIME_MS     4000
-#define BLE_TIMEOUT_MS          (3 * 60 * 1000)
+#define BLE_TIMEOUT_MS          (5 * 60 * 1000)
 
 // --- UUID ---
 #define GATTS_SERVICE_UUID_TEST   0x00FF
@@ -83,27 +83,16 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         case ESP_GATTS_REG_EVT:
             esp_ble_gap_set_device_name(DEVICE_NAME);
             esp_ble_gap_config_adv_data(&(esp_ble_adv_data_t){
-                .set_scan_rsp = false,
-                .include_name = true,
-                .include_txpower = true,
-                .min_interval = 0x20,
-                .max_interval = 0x40,
-                .appearance = 0x00,
-                .manufacturer_len = 0,
-                .p_manufacturer_data =  NULL,
-                .service_data_len = 0,
-                .p_service_data = NULL,
-                .service_uuid_len = 0,
-                .p_service_uuid = NULL,
+                .set_scan_rsp = false, .include_name = true, .include_txpower = true,
+                .min_interval = 0x20, .max_interval = 0x40, .appearance = 0x00,
                 .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
             });
-
+            
             esp_gatt_srvc_id_t service_id;
             service_id.is_primary = true;
             service_id.id.inst_id = 0x00;
             service_id.id.uuid.len = ESP_UUID_LEN_16;
             service_id.id.uuid.uuid.uuid16 = GATTS_SERVICE_UUID_TEST;
-
             esp_ble_gatts_create_service(gatts_if, &service_id, GATTS_NUM_HANDLE_TEST);
             break;
 
@@ -123,59 +112,83 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
             break;
 
         case ESP_GATTS_ADD_CHAR_EVT:
-            if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_SSID) {
-                s_handle_ssid = param->add_char.attr_handle;
-            } else if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_PASS) {
-                s_handle_pass = param->add_char.attr_handle;
-            } else if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_ACTION) {
-                s_handle_action = param->add_char.attr_handle;
+            if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_SSID) s_handle_ssid = param->add_char.attr_handle;
+            else if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_PASS) s_handle_pass = param->add_char.attr_handle;
+            else if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_ACTION) s_handle_action = param->add_char.attr_handle;
+            break;
+
+        // --- TU JEST NAPRAWA PROBLEMU ---
+        case ESP_GATTS_WRITE_EVT:
+            ESP_LOGI(TAG, "WRITE: hnd %d, len %d, prep %d, off %d", param->write.handle, param->write.len, param->write.is_prep, param->write.offset);
+            if (s_ble_timer) xTimerReset(s_ble_timer, 0);
+
+            // 1. Zapisywanie danych do zmiennych (działa dla krótkich i długich dzięki offset)
+            if (param->write.handle == s_handle_ssid) {
+                if (param->write.offset == 0) memset(s_wifi_ssid, 0, sizeof(s_wifi_ssid));
+                if (param->write.offset + param->write.len < sizeof(s_wifi_ssid)) {
+                    memcpy(s_wifi_ssid + param->write.offset, param->write.value, param->write.len);
+                }
+            } else if (param->write.handle == s_handle_pass) {
+                if (param->write.offset == 0) memset(s_wifi_pass, 0, sizeof(s_wifi_pass));
+                if (param->write.offset + param->write.len < sizeof(s_wifi_pass)) {
+                    memcpy(s_wifi_pass + param->write.offset, param->write.value, param->write.len);
+                }
+            }
+
+            // 2. Wysyłanie odpowiedzi (NAPRAWA BŁĘDU p_msg != NULL)
+            if (param->write.need_rsp) {
+                // ZAWSZE alokujemy pamięć dla odpowiedzi, żeby uniknąć błędu przy długich danych
+                esp_gatt_rsp_t *rsp = (esp_gatt_rsp_t *)malloc(sizeof(esp_gatt_rsp_t));
+                if (rsp) {
+                    memset(rsp, 0, sizeof(esp_gatt_rsp_t));
+                    rsp->attr_value.handle = param->write.handle;
+                    rsp->attr_value.len = param->write.len;
+                    rsp->attr_value.offset = param->write.offset;
+                    rsp->attr_value.auth_req = ESP_GATT_AUTH_REQ_NONE;
+                    
+                    // Odsyłamy (echo) otrzymane dane - WYMAGANE przez standard BLE dla Prepare Write
+                    if (param->write.len > 0) {
+                        memcpy(rsp->attr_value.value, param->write.value, param->write.len);
+                    }
+                    
+                    esp_err_t err = esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, ESP_GATT_OK, rsp);
+                    if (err != ESP_OK) ESP_LOGE(TAG, "Send Rsp Error: %d", err);
+                    free(rsp);
+                }
+            }
+            
+            // Obsługa Akcji (Zapis do flasha) - wykonujemy tylko przy krótkim zapisie
+            if (param->write.handle == s_handle_action && !param->write.is_prep) {
+                if (param->write.len > 0 && param->write.value[0] == '1') {
+                    ESP_LOGW(TAG, "ZAPIS I RESTART...");
+                    storage_save_str("wifi", "ssid", s_wifi_ssid);
+                    storage_save_str("wifi", "pass", s_wifi_pass);
+                    vTaskDelay(pdMS_TO_TICKS(500)); 
+                    esp_restart();
+                }
             }
             break;
 
-        case ESP_GATTS_WRITE_EVT:
-            ESP_LOGI(TAG, "Otrzymano dane na handle %d, len: %d", param->write.handle, param->write.len);
-            if (s_ble_timer) xTimerReset(s_ble_timer, 0);
-
-            if (param->write.handle == s_handle_ssid) {
-                memset(s_wifi_ssid, 0, sizeof(s_wifi_ssid));
-                int len = (param->write.len >= sizeof(s_wifi_ssid)) ? (sizeof(s_wifi_ssid)-1) : param->write.len;
-                memcpy(s_wifi_ssid, param->write.value, len);
-                ESP_LOGI(TAG, "Otrzymano SSID: %s", s_wifi_ssid);
-            } else if (param->write.handle == s_handle_pass) {
-                memset(s_wifi_pass, 0, sizeof(s_wifi_pass));
-                int len = (param->write.len >= sizeof(s_wifi_pass)) ? (sizeof(s_wifi_pass)-1) : param->write.len;
-                memcpy(s_wifi_pass, param->write.value, len);
-                ESP_LOGI(TAG, "Otrzymano Haslo (dlugosc %d)", len);
-            } else if (param->write.handle == s_handle_action) {
-                if (param->write.len > 0 && (param->write.value[0] == '1' || param->write.value[0] == 0x01)) {
-                    if (strlen(s_wifi_ssid) > 0) {
-                        ESP_LOGI(TAG, "Zapisywanie do NVS...");
-                        storage_save_str("wifi", "ssid", s_wifi_ssid);
-                        storage_save_str("wifi", "pass", s_wifi_pass);
-                        ESP_LOGW(TAG, "Dane zapisane. Restart ESP...");
-                        vTaskDelay(pdMS_TO_TICKS(500));
-                        esp_restart();
-                    }
-                }
-            }
-            if (param->write.need_rsp) {
-                esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, ESP_GATT_OK, NULL);
-            }
+        // --- 3. KONIECZNA OBSŁUGA KOŃCA DŁUGIEGO ZAPISU ---
+        case ESP_GATTS_EXEC_WRITE_EVT:
+            ESP_LOGI(TAG, "EXEC WRITE (Koniec długiego zapisu)");
+            esp_ble_gatts_send_response(gatts_if, param->exec_write.conn_id, param->exec_write.trans_id, ESP_GATT_OK, NULL);
             break;
 
         case ESP_GATTS_CONNECT_EVT:
-            ESP_LOGI(TAG, "Urzadzenie podlaczone.");
+            ESP_LOGI(TAG, "CONNECTED");
             if (s_ble_timer) xTimerReset(s_ble_timer, 0);
             break;
 
         case ESP_GATTS_DISCONNECT_EVT:
-            ESP_LOGI(TAG, "Rozlaczono. Ponawiam rozglaszanie...");
+            ESP_LOGI(TAG, "DISCONNECTED");
             esp_ble_gap_start_advertising(&(esp_ble_adv_params_t){
                 .adv_int_min = 0x20, .adv_int_max = 0x40,
                 .adv_type = ADV_TYPE_IND, .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
                 .channel_map = ADV_CHNL_ALL, .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
             });
             break;
+            
         default: break;
     }
 }
