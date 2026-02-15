@@ -10,6 +10,7 @@ typedef struct {
     int64_t timestamp; // Czas pomiaru (Unix timestamp)
     float temp;
     uint32_t pressure;
+    int sensor_id;
 } SensorData;
 
 // Montuje system plików (wywołaj raz w app_main)

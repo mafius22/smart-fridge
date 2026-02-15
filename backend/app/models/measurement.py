@@ -1,5 +1,6 @@
 from app.extensions import db
 from datetime import datetime, timezone
+from datetime import datetime, timezone
 
 class Measurement(db.Model):
     __tablename__ = 'measurements'
@@ -19,9 +20,11 @@ class Measurement(db.Model):
     )
 
     def to_dict(self):
+        dt_object = datetime.fromtimestamp(self.esp_timestamp, timezone.utc)
+        
         return {
             "device": self.device_id,
             "temp": self.temperature,
             "press": self.pressure,
-            "time": self.timestamp.isoformat() + 'Z'
+            "time": dt_object.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
         }

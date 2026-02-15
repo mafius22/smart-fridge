@@ -7,7 +7,7 @@
 #include "freertos/event_groups.h"
 #include <string.h>
 
-// NOWE NAGŁÓWKI DO SPRAWDZANIA INTERNETU
+// Biblioteki sieciowe (LwIP)
 #include "lwip/err.h"
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
@@ -50,7 +50,7 @@ static bool check_internet_connection(void) {
     }
 
     struct timeval timeout;
-    timeout.tv_sec = 3;
+    timeout.tv_sec = 3; // 3 sekundy na test pinga
     timeout.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
@@ -69,6 +69,7 @@ static bool check_internet_connection(void) {
     close(sock);
     return is_ok;
 }
+
 // -------------------------------------------------
 
 static void event_handler(void* arg, esp_event_base_t event_base,
@@ -87,8 +88,6 @@ static void event_handler(void* arg, esp_event_base_t event_base,
             } else {
                 xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
             }
-        } else {
-            ESP_LOGI(TAG, "Rozlaczono WiFi (celowo). Nie ponawiam.");
         }
     } 
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
@@ -99,25 +98,32 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 }
 
 void wifi_connect_init(void) {
-    s_wifi_event_group = xEventGroupCreate();
+    // Tworzenie grupy zdarzeń, jeśli jeszcze nie istnieje
+    if (s_wifi_event_group == NULL) {
+        s_wifi_event_group = xEventGroupCreate();
+    }
     
-    // Inicjalizacja stosu sieciowego (bezpieczna do wielokrotnego wywołania)
+    // Inicjalizacja stosu sieciowego
     ESP_ERROR_CHECK(esp_netif_init());
     
-    // --- POPRAWKA TUTAJ: USUNIĘTO esp_event_loop_create_default() ---
-    // Pętla zdarzeń jest już utworzona w app_main().
-    // Wywołanie jej tutaj drugi raz powodowało błąd i restart ESP32.
+    // UWAGA: esp_event_loop_create_default() jest w main.c, tu go nie wołamy
     
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, NULL));
+    // Rejestracja handlerów (używamy instance_register, żeby nie dublować)
+    esp_event_handler_instance_t instance_any_id;
+    esp_event_handler_instance_t instance_got_ip;
+    
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, &instance_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, &instance_got_ip));
 
     wifi_config_t wifi_config = {0};
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    
+    // Ładowanie konfiguracji
     storage_load_str("wifi", "ssid", (char*)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), DEFAULT_SSID);
     storage_load_str("wifi", "pass", (char*)wifi_config.sta.password, sizeof(wifi_config.sta.password), DEFAULT_PASS);
 
@@ -131,27 +137,43 @@ esp_err_t wifi_connect_start(void) {
     s_retry_num = 0;
     s_allow_reconnect = true; 
     
+    if (s_wifi_event_group == NULL) return ESP_FAIL;
+
     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
     
     ESP_LOGI(TAG, "Wlaczam WiFi...");
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    ESP_LOGI(TAG, "Czekam na polaczenie (max 10s)...");
+
+    // --- KLUCZOWA POPRAWKA ---
+    // Zmieniono portMAX_DELAY na pdMS_TO_TICKS(10000) = 10 sekund
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
             WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE, pdFALSE, portMAX_DELAY);
+            pdFALSE, pdFALSE, pdMS_TO_TICKS(10000));
 
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Polaczono z lokalnym routerem. Weryfikuje WAN...");
         
+        // Sprawdzamy czy jest wyjście na świat
         if (check_internet_connection()) {
             return ESP_OK; 
         } else {
+            ESP_LOGW(TAG, "Jest WiFi, ale brak internetu. Rozlaczam.");
             wifi_connect_stop(); 
             return ESP_FAIL; 
         }
 
     } else {
-        ESP_LOGE(TAG, "Nie udalo sie polaczyc z routerem WiFi.");
+        // Obsługa Timeoutu (gdy minęło 10s i nic)
+        if (bits & WIFI_FAIL_BIT) {
+             ESP_LOGE(TAG, "Nie udalo sie polaczyc (bledne haslo/brak zasiegu).");
+        } else {
+             ESP_LOGE(TAG, "TIMEOUT: Router nie odpowiada.");
+        }
+        
+        // Ważne: Wyłączamy WiFi, żeby nie żarło prądu w trybie offline
+        wifi_connect_stop();
         return ESP_FAIL;
     }
 }

@@ -15,22 +15,32 @@ class MeasurementService:
     
     @staticmethod
     def get_latest_for_device(device_id):
-        """Pobiera ostatni pomiar dla urządzenia"""
+        """Pobiera ostatni pomiar dla urządzenia (wg czasu ESP)"""
+        # ZMIANA: Sortujemy po esp_timestamp zamiast timestamp
         return Measurement.query.filter_by(device_id=device_id)\
-            .order_by(Measurement.timestamp.desc())\
+            .order_by(Measurement.esp_timestamp.desc())\
             .first()
 
     @staticmethod
     def get_measurements_in_range(start_date, end_date, device_id=None):
-        """Pobiera historię z opcjonalnym filtrem urządzenia"""
+        """Pobiera historię z opcjonalnym filtrem urządzenia (wg czasu ESP)"""
+        
+        # ZMIANA: Konwersja obiektu datetime na Unix Timestamp (int), 
+        # ponieważ kolumna esp_timestamp w bazie to BigInteger.
+        start_ts = int(start_date.timestamp())
+        end_ts = int(end_date.timestamp())
+
         query = Measurement.query.filter(
-            Measurement.timestamp >= start_date,
-            Measurement.timestamp <= end_date
+            Measurement.esp_timestamp >= start_ts,
+            Measurement.esp_timestamp <= end_ts
         )
+        
         if device_id and device_id != "ALL":
             query = query.filter(Measurement.device_id == device_id)
             
-        return query.order_by(Measurement.timestamp.asc()).all()
+        # ZMIANA: Sortowanie rosnąco po czasie ESP
+        # Zwraca listę obiektów Measurement, więc frontend dostanie to samo co wcześniej (przez to_dict)
+        return query.order_by(Measurement.esp_timestamp.asc()).all()
 
 # --- Funkcje pomocnicze dla MQTT/HTTP POST ---
 
@@ -104,20 +114,20 @@ def save_measurement_direct(app, item):
 
         # 2. Zapis i Alert
         with app.app_context():
+            # ZMIANA: Zapisujemy esp_timestamp (item['ts']) do kolumny esp_timestamp
             stmt = insert(Measurement).values(
                 device_id=item['dev'],
-                esp_timestamp=item['ts'],
+                esp_timestamp=item['ts'],  # <--- Unix Timestamp z ESP32
                 temperature=item['temp'],
                 pressure=item['press']
             )
             db.session.execute(stmt)
             
-            # Pobieramy OBIEKT urządzenia dla alertów
-            device_obj = db.session.get(Device, item['dev'])
-            
             db.session.commit()
             
             # 3. Sprawdzenie alertów (jeśli urządzenie istnieje)
+            device_obj = db.session.get(Device, item['dev'])
+            
             if device_obj:
                 send_alert(item['temp'], device_obj, app)
 
