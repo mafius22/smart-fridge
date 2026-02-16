@@ -245,7 +245,7 @@ void app_main(void) {
             wifi_connect_stop();
         }
 
-        ESP_LOGI(TAG, "[SLEEP] Czekam 10 sekund...");
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        ESP_LOGI(TAG, "[SLEEP] Czekam 10 minut...");
+        vTaskDelay(pdMS_TO_TICKS(600000));
     }
 }
