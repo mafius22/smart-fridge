@@ -1,44 +1,45 @@
 Smart Fridge
 ==================
 
-## Cel Systemu
-Zapewnienie ciągłego nadzoru nad warunkami przechowywania produktów w obiektach gastronomicznych i handlowych. System samodzielnie rejestruje dane i wysyła natychmiastowe powiadomienia o awariach, zapobiegając psuciu się żywności.
-
-## Architektura Systemu
-
-1.  **Urządzenie:** ESP32 zbiera i wysyła dane na server.
-3.  **Backend:** Serwer Flask przetwarza dane i zarządza alarmami.
-4.  **Frontend:** Aplikacja reactowa do wizualizacji, konfiguracji oraz odbierania powiadomień.
+## System Purpose
+Ensuring continuous monitoring of product storage conditions in catering and retail facilities. The system independently records data and sends immediate notifications of failures, preventing food spoilage.
 
 
-## Technologie
+## System Architecture
+
+1.  **Device:** The ESP32 collects and transmits data to the server.
+3.  **Backend:** A Flask server processes the data and manages alarms.
+4.  **Frontend:** A React application for visualization, configuration, and receiving notifications.
+
+
+## Technologies
 
 ### `/firmware`
-* **Język:** C
+* **Language:** C
 * **MCU:** ESP32
 * **Framework:** ESP-IDF, FreeRTOS
-* **Czujniki:** DS18B20
+* **Sensors:** DS18B20
 
 ### `/backend`
-* **Język:** Python
+* **Language:** Python
 * **Framework:** Flask
-* **Baza Danych:** SQLite + SQLAlchemy ORM
+* **Data Base:** SQLite + SQLAlchemy ORM
 * **MQTT:** Paho-MQTT
 * **Push:** PyWebPush
 
 ### `/frontend`
-* **Język:** JS
+* **Language:** JS
 * **Framework:** React + Vite
-* **HTTP Klient:** Axios
-* **Service Worker:** Obsługa powiadomień w tle i PWA
+* **HTTP Client:** Axios
+* **Service Worker:** Background notification and PWA support
 
 ---
 
-## Struktura Projektu
+## Project Structure
 
 ```text
 smart-fridge/
-├── backend/            # Logika serwerowa
-├── docs/               # Notatki
-├── firmware/           # Kod źródłowy ESP32
-└── frontend/           # Aplikacji React
+├── backend/            # Server logic
+├── docs/               # Notes
+├── firmware/           # ESP32 source code
+└── frontend/           # React app
