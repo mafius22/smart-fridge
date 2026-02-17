@@ -6,16 +6,12 @@
 
 static const char *TAG = "STORAGE";
 
-// Inicjalizacja z automatyczną naprawą
 esp_err_t storage_init(void) {
     esp_err_t err = nvs_flash_init();
     
-    // Jeśli nie ma miejsca lub zmieniła się wersja partycji (np. po dodaniu OTA)
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGW(TAG, "NVS partition truncated or different version. Erasing...");
-        // Czyścimy partycję NVS
         ESP_ERROR_CHECK(nvs_flash_erase());
-        // Próbujemy zainicjować ponownie
         err = nvs_flash_init();
     }
     
@@ -28,7 +24,6 @@ esp_err_t storage_init(void) {
     return err;
 }
 
-// Pomocnicza funkcja do otwierania NVS (unikamy duplikacji kodu)
 static esp_err_t _open_nvs(const char* namespace, nvs_open_mode_t mode, nvs_handle_t *handle) {
     esp_err_t err = nvs_open(namespace, mode, handle);
     if (err != ESP_OK) {
@@ -44,7 +39,7 @@ esp_err_t storage_save_i32(const char* namespace, const char* key, int32_t value
 
     err = nvs_set_i32(handle, key, value);
     if (err == ESP_OK) {
-        err = nvs_commit(handle); // Ważne: zatwierdzenie zmian
+        err = nvs_commit(handle);
     }
     
     nvs_close(handle);
@@ -57,14 +52,14 @@ esp_err_t storage_load_i32(const char* namespace, const char* key, int32_t* valu
     
     if (err != ESP_OK) {
         *value = default_value;
-        return err; // Błąd otwarcia, zwracamy domyślną
+        return err;
     }
 
     err = nvs_get_i32(handle, key, value);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         *value = default_value;
         ESP_LOGI(TAG, "Key '%s' not found in '%s', using default", key, namespace);
-        err = ESP_OK; // To nie jest błąd krytyczny
+        err = ESP_OK;
     }
     
     nvs_close(handle);
@@ -90,7 +85,6 @@ esp_err_t storage_load_str(const char* namespace, const char* key, char* buffer,
     esp_err_t err = _open_nvs(namespace, NVS_READONLY, &handle);
     
     if (err != ESP_OK) {
-        // Jeśli nie udało się otworzyć, kopiujemy domyślną wartość
         if (default_value != NULL) {
             strncpy(buffer, default_value, max_len - 1);
             buffer[max_len - 1] = '\0';
@@ -98,24 +92,20 @@ esp_err_t storage_load_str(const char* namespace, const char* key, char* buffer,
         return err;
     }
 
-    // Najpierw sprawdzamy długość zapisanego ciągu
     size_t required_size;
     err = nvs_get_str(handle, key, NULL, &required_size);
 
     if (err == ESP_OK) {
         if (required_size <= max_len) {
-            // Mieści się, czytamy
             err = nvs_get_str(handle, key, buffer, &required_size);
         } else {
-            // Bufor za mały
             ESP_LOGE(TAG, "Buffer too small for key '%s'. Needed: %d", key, required_size);
             err = ESP_ERR_NVS_INVALID_LENGTH;
         }
     } else if (err == ESP_ERR_NVS_NOT_FOUND) {
-        // Nie znaleziono, użyj domyślnej
         if (default_value != NULL) {
             strncpy(buffer, default_value, max_len - 1);
-            buffer[max_len - 1] = '\0'; // Zabezpieczenie null-terminator
+            buffer[max_len - 1] = '\0';
         }
         err = ESP_OK; 
     }

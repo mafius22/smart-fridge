@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, memo } from 'react';
 import { Bell, Save, Settings, X, Thermometer, Cpu, AlertTriangle } from 'lucide-react';
 
-// --- KOMPONENT WIERSZA (Zoptymalizowany) ---
 const DeviceRow = memo(({ device, isActive, onThresholdChange }) => {
   
   const handleChange = (e) => {
@@ -46,29 +45,23 @@ const DeviceRow = memo(({ device, isActive, onThresholdChange }) => {
   );
 });
 
-// --- GŁÓWNY KOMPONENT ---
 export default function NotificationSettings({ 
   isSubscribed, 
   settings, 
-  setSettings, // To używamy tylko do globalnego switcha
+  setSettings,
   onSubscribe, 
   onSave 
 }) {
   const [isOpen, setIsOpen] = useState(false);
   
-  // TO JEST KLUCZOWE: Lokalna kopia urządzeń do edycji ("Brudnopis")
   const [localDevices, setLocalDevices] = useState([]);
 
-  // Kiedy otwieramy modal, kopiujemy aktualne dane z App.js do brudnopisu.
-  // Dzięki [isOpen] robimy to TYLKO RAZ przy otwarciu, więc App.js nie nadpisze nam edycji w trakcie pisania.
   useEffect(() => {
     if (isOpen && settings?.devices) {
-      // Robimy głęboką kopię, żeby oderwać się od referencji App.js
       setLocalDevices(JSON.parse(JSON.stringify(settings.devices)));
     }
-  }, [isOpen]); // Zależymy tylko od otwarcia okna, a nie od zmiany settings w tle!
+  }, [isOpen]); 
 
-  // Edytujemy tylko lokalny "brudnopis"
   const handleLocalChange = useCallback((deviceId, newValue) => {
     setLocalDevices(prev => prev.map(dev => {
         if (dev.device_id === deviceId) {
@@ -79,12 +72,10 @@ export default function NotificationSettings({
   }, []);
 
   const handleGlobalToggle = (e) => {
-      // Globalny switch możemy zmieniać od razu w App.js, bo to jedno kliknięcie
       setSettings(prev => ({ ...prev, isActive: e.target.checked }));
   };
 
   const handleSaveClick = () => {
-      // Przekazujemy nasz "brudnopis" do funkcji zapisu w App.js
       onSave(localDevices);
       setIsOpen(false);
   };

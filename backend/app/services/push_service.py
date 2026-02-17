@@ -12,7 +12,7 @@ def send_alert(temperature, device_obj, app):
     Wysyła powiadomienie push.
     
     Logika:
-    1. Znajduje subskrybentów przypisanych do TEGO urządzenia (device_obj).
+    1. Znajduje subskrybentów przypisanych do urządzenia.
     2. Sprawdza, czy subskrybent jest globalnie aktywny.
     3. Sprawdza, czy aktualna temperatura > custom_threshold subskrybenta dla tego urządzenia.
     """
@@ -24,8 +24,6 @@ def send_alert(temperature, device_obj, app):
         return
 
     with app.app_context():
-        # Łączymy PushSubscriber z SubscriberDeviceSettings
-        # Szukamy par (Subskrybent, Ustawienia), które spełniają warunki alarmu
         alerts_to_send = db.session.query(PushSubscriber, SubscriberDeviceSettings)\
             .join(SubscriberDeviceSettings, PushSubscriber.id == SubscriberDeviceSettings.subscriber_id)\
             .filter(SubscriberDeviceSettings.device_id == device_obj.id)\
@@ -34,7 +32,6 @@ def send_alert(temperature, device_obj, app):
             .all()
         
         if not alerts_to_send:
-            # To normalne - nikt nie ma tak niskiego progu lub wszyscy wyłączyli powiadomienia
             return
 
         logger.info(f"ALARM: Wysyłanie powiadomień do {len(alerts_to_send)} użytkowników dla {device_obj.name}.")
@@ -59,13 +56,13 @@ def send_alert(temperature, device_obj, app):
                     data=payload,
                     vapid_private_key=vapid_private,
                     vapid_claims={"sub": vapid_email},
-                    ttl=43200,          # 12h ważności
+                    ttl=43200, 
                     headers={"Urgency": "high"}
                 )
             except WebPushException as ex:
                 if ex.response and ex.response.status_code == 410:
                     logger.info(f"Usuwanie martwej subskrypcji: {sub.id}")
-                    db.session.delete(sub) # Usunie też settings kaskadowo
+                    db.session.delete(sub)
                 else:
                     logger.error(f"Błąd WebPush dla {sub.id}: {ex}")
 

@@ -8,14 +8,12 @@
 #include "driver/gpio.h"
 #include "esp_event.h"
 #include <sys/time.h>
-#include <time.h>           // Do obsługi struktur czasu
-#include "esp_sntp.h"       // Do synchronizacji czasu z Internetem
+#include <time.h>         
+#include "esp_sntp.h"     
 
-// Biblioteki OneWire/DS18B20
 #include "onewire_bus.h"
 #include "ds18b20.h"
 
-// Twoje biblioteki
 #include "storage_manager.h"
 #include "offline_buffer.h"
 #include "wifi_connect.h"
@@ -26,29 +24,25 @@ static const char *TAG = "MAIN_SYSTEM";
 
 // Konfiguracja
 #define SENSOR_GPIO  GPIO_NUM_4
-#define MAX_SENSORS  10          // Limit liczby czujników
+#define MAX_SENSORS  10  
 
-// --- FUNKCJA DO POBIERANIA CZASU (SNTP) ---
+// --- FUNKCJA DO POBIERANIA CZASU---
 static void obtain_time(void) {
-    // 1. Sprawdź czy czas jest już ustawiony
     time_t now;
     struct tm timeinfo;
     time(&now);
     localtime_r(&now, &timeinfo);
 
-    // Jeśli rok > 2020, to znaczy, że czas jest OK. Nie męczymy serwerów NTP.
     if (timeinfo.tm_year > (2020 - 1900)) {
         return; 
     }
 
     ESP_LOGI(TAG, "Czas nieaktualny (Rok 1970). Inicjalizacja SNTP...");
 
-    // Inicjalizacja SNTP (tylko jeśli nie działa)
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "pool.ntp.org");
     esp_sntp_init();
 
-    // Czekamy na synchronizację (max 5-8 sekund)
     int retry = 0;
     const int retry_count = 10;
     while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count) {
@@ -56,11 +50,9 @@ static void obtain_time(void) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
     
-    // Ustawienie strefy czasowej (Polska: CET/CEST)
     setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
     tzset();
 
-    // Logowanie wyniku
     time(&now);
     localtime_r(&now, &timeinfo);
     if (timeinfo.tm_year > (2020 - 1900)) {
@@ -72,31 +64,26 @@ static void obtain_time(void) {
     }
 }
 
-// Funkcja pomocnicza do pobierania pomiaru
 SensorData get_ds18b20_reading(ds18b20_device_handle_t sensor_handle) {
     SensorData d;
     
-    // Pobranie aktualnego czasu systemowego
     struct timeval tv;
     gettimeofday(&tv, NULL);
     d.timestamp = (int64_t)tv.tv_sec;
 
-    d.temp = -127.0; // Wartość błędu
-    d.pressure = 0;  // Brak pomiaru ciśnienia
-    d.sensor_id = -1; // Zostanie nadpisane w pętli
+    d.temp = -127.0; 
+    d.pressure = 0;  
+    d.sensor_id = -1;
 
     if (sensor_handle == NULL) {
         ESP_LOGE(TAG, "Uchwyt czujnika jest NULL");
         return d;
     }
 
-    // 1. Wyzwolenie pomiaru
     ESP_ERROR_CHECK(ds18b20_trigger_temperature_conversion(sensor_handle));
     
-    // 2. Czekanie na konwersję (800ms)
     vTaskDelay(pdMS_TO_TICKS(800));
 
-    // 3. Odczyt temperatury
     float temperature;
     if (ds18b20_get_temperature(sensor_handle, &temperature) == ESP_OK) {
         d.temp = temperature;
@@ -108,7 +95,6 @@ SensorData get_ds18b20_reading(ds18b20_device_handle_t sensor_handle) {
 }
 
 void app_main(void) {
-    // --- 1. INICJALIZACJA SYSTEMU ---
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
       ESP_ERROR_CHECK(nvs_flash_erase());
@@ -122,7 +108,6 @@ void app_main(void) {
     ble_config_init(GPIO_NUM_0); 
     wifi_connect_init();
 
-    // --- 2. KONFIGURACJA ONEWIRE ---
     onewire_bus_handle_t bus = NULL;
     onewire_bus_config_t bus_config = {
         .bus_gpio_num = SENSOR_GPIO,
@@ -134,7 +119,6 @@ void app_main(void) {
     ESP_LOGI(TAG, "Inicjalizacja OneWire na GPIO %d...", SENSOR_GPIO);
     ESP_ERROR_CHECK(onewire_new_bus_rmt(&bus_config, &rmt_config, &bus));
 
-    // --- 3. WYSZUKIWANIE CZUJNIKÓW ---
     int ds18b20_device_num = 0;
     ds18b20_device_handle_t ds18b20s[MAX_SENSORS];
     onewire_device_iter_handle_t iter = NULL;
@@ -158,7 +142,6 @@ void app_main(void) {
     ESP_ERROR_CHECK(onewire_del_device_iter(iter));
     ESP_LOGI(TAG, "Znaleziono łącznie: %d czujników.", ds18b20_device_num);
 
-    // --- 4. PĘTLA GŁÓWNA ---
     vTaskDelay(pdMS_TO_TICKS(1000));
     int cycle_counter = 0;
 
@@ -166,7 +149,6 @@ void app_main(void) {
         cycle_counter++;
         ESP_LOGI(TAG, "\n================ CYKL #%d ================", cycle_counter);
 
-        // A. Łączenie z siecią i czasem
         ESP_LOGI(TAG, "[WiFi] Próba połączenia...");
         bool is_online = false;
         bool mqtt_ready = false;
@@ -174,14 +156,12 @@ void app_main(void) {
         if (wifi_connect_start() == ESP_OK) {
             is_online = true;
             
-            // Próba pobrania czasu (jeśli go nie mamy)
             obtain_time();
 
             ESP_LOGI(TAG, "[SYSTEM] ONLINE. Start MQTT...");
             if (mqtt_app_start()) {
                 mqtt_ready = true;
                 
-                // Wysyłamy bufor tylko jeśli jesteśmy online
                 if (offline_buffer_count() > 0) {
                     ESP_LOGW(TAG, "Wysyłanie bufora offline...");
                     offline_process_queue(mqtt_send_sensor_data);
@@ -191,20 +171,17 @@ void app_main(void) {
             ESP_LOGE(TAG, "Brak WiFi (Offline).");
         }
 
-        // B. Weryfikacja czasu dla bufora
         time_t now;
         struct tm timeinfo;
         time(&now);
         localtime_r(&now, &timeinfo);
         
-        // Czy mamy poprawny rok? (Większy niż 2020)
         bool time_is_valid = (timeinfo.tm_year > (2020 - 1900));
         
         if (!time_is_valid) {
              ESP_LOGW(TAG, "⚠️ CZAS NIEPRAWIDŁOWY (1970). Dane nie będą buforowane!");
         }
 
-        // C. Pętla po czujnikach
         if (ds18b20_device_num > 0) {
             for (int i = 0; i < ds18b20_device_num; i++) {
                 ESP_LOGI(TAG, "--- Czujnik %d ---", i);
@@ -214,9 +191,7 @@ void app_main(void) {
 
                 ESP_LOGI(TAG, "Odczyt ID[%d]: %.2f st. C", i, current_data.temp);
 
-                // Logika Wysyłki / Zapisu
                 if (mqtt_ready) {
-                    // Mamy internet -> Wysyłamy
                     if (!mqtt_send_sensor_data(current_data)) {
                         ESP_LOGE(TAG, "Błąd MQTT. Próba buforowania...");
                         if (time_is_valid) offline_buffer_add(current_data);
@@ -224,7 +199,6 @@ void app_main(void) {
                         ESP_LOGI(TAG, "Wysłano OK.");
                     }
                 } else {
-                    // Brak internetu -> Buforujemy TYLKO jeśli czas jest OK
                     if (time_is_valid) {
                         ESP_LOGI(TAG, "Offline -> Zapis do bufora.");
                         offline_buffer_add(current_data);
@@ -233,13 +207,12 @@ void app_main(void) {
                     }
                 }
 
-                vTaskDelay(pdMS_TO_TICKS(100)); // Mała przerwa
+                vTaskDelay(pdMS_TO_TICKS(100)); 
             }
         } else {
             ESP_LOGE(TAG, "BRAK CZUJNIKÓW!");
         }
 
-        // D. Zakończenie cyklu
         if (is_online) {
             mqtt_app_stop();
             wifi_connect_stop();

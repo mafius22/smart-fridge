@@ -11,7 +11,6 @@ export default function HistoryChart({
   selectedDeviceName 
 }) {
 
-  // Sprawdzamy, czy mamy dane do wyświetlenia
   const hasData = data && data.length > 0;
 
   return (
@@ -48,10 +47,8 @@ export default function HistoryChart({
           </button>
         </div>
         
-        {/* Usunąłem sekcję .toggles, ponieważ wyświetlamy tylko temperaturę */}
       </div>
 
-      {/* Kontener o stałej wysokości */}
       <div style={{ width: '100%', height: 400, minHeight: 400, position: 'relative'}}>
         
         {hasData ? (
@@ -64,7 +61,6 @@ export default function HistoryChart({
                 minTickGap={30}
               />
               
-              {/* Tylko jedna oś Y dla temperatury */}
               <YAxis 
                     domain={['auto', 'auto']} 
                     unit="°C" 
@@ -77,7 +73,6 @@ export default function HistoryChart({
               />
               <Legend />
               
-              {/* Tylko linia temperatury */}
               <Line 
                   type="monotone" 
                   dataKey="temp" 
@@ -90,7 +85,6 @@ export default function HistoryChart({
             </LineChart>
           </ResponsiveContainer>
         ) : (
-          // Ten element wyświetla się ZAMIAST wykresu i centruje tekst
           <div style={{ 
             width: '100%', 
             height: '100%', 

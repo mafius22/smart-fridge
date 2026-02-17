@@ -1,5 +1,5 @@
 #include "ble_config.h"
-#include "storage_manager.h" // Upewnij się, że ta ścieżka jest poprawna dla Twojej struktury!
+#include "storage_manager.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +11,6 @@
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 
-// Biblioteki Bluetooth
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "esp_gap_ble_api.h"
@@ -34,7 +33,7 @@ static const char *TAG = "BLE_CONFIG";
 
 // --- ZMIENNE GLOBALNE ---
 static TimerHandle_t s_ble_timer = NULL;
-static gpio_num_t s_btn_gpio = GPIO_NUM_0; // Domyślnie 0, ale zostanie nadpisane w init
+static gpio_num_t s_btn_gpio = GPIO_NUM_0;
 static bool s_ble_is_active = false;
 
 static char s_wifi_ssid[33] = {0};
@@ -44,9 +43,8 @@ static uint16_t s_handle_ssid = 0;
 static uint16_t s_handle_pass = 0;
 static uint16_t s_handle_action = 0;
 
-/* --- PROTOTYPY FUNKCJI (To naprawia błąd "implicit declaration") --- */
 static void ble_timeout_callback(TimerHandle_t xTimer);
-static void ble_config_start(void); // Zmieniono nazwę, aby pasowała do wywołania w button_task
+static void ble_config_start(void);
 static void ble_config_stop_internal(void);
 
 // ----------------------------------------------------------------------------
@@ -117,12 +115,10 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
             else if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_ACTION) s_handle_action = param->add_char.attr_handle;
             break;
 
-        // --- TU JEST NAPRAWA PROBLEMU ---
         case ESP_GATTS_WRITE_EVT:
             ESP_LOGI(TAG, "WRITE: hnd %d, len %d, prep %d, off %d", param->write.handle, param->write.len, param->write.is_prep, param->write.offset);
             if (s_ble_timer) xTimerReset(s_ble_timer, 0);
 
-            // 1. Zapisywanie danych do zmiennych (działa dla krótkich i długich dzięki offset)
             if (param->write.handle == s_handle_ssid) {
                 if (param->write.offset == 0) memset(s_wifi_ssid, 0, sizeof(s_wifi_ssid));
                 if (param->write.offset + param->write.len < sizeof(s_wifi_ssid)) {
@@ -135,9 +131,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                 }
             }
 
-            // 2. Wysyłanie odpowiedzi (NAPRAWA BŁĘDU p_msg != NULL)
             if (param->write.need_rsp) {
-                // ZAWSZE alokujemy pamięć dla odpowiedzi, żeby uniknąć błędu przy długich danych
                 esp_gatt_rsp_t *rsp = (esp_gatt_rsp_t *)malloc(sizeof(esp_gatt_rsp_t));
                 if (rsp) {
                     memset(rsp, 0, sizeof(esp_gatt_rsp_t));
@@ -146,7 +140,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                     rsp->attr_value.offset = param->write.offset;
                     rsp->attr_value.auth_req = ESP_GATT_AUTH_REQ_NONE;
                     
-                    // Odsyłamy (echo) otrzymane dane - WYMAGANE przez standard BLE dla Prepare Write
                     if (param->write.len > 0) {
                         memcpy(rsp->attr_value.value, param->write.value, param->write.len);
                     }
@@ -157,7 +150,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                 }
             }
             
-            // Obsługa Akcji (Zapis do flasha) - wykonujemy tylko przy krótkim zapisie
             if (param->write.handle == s_handle_action && !param->write.is_prep) {
                 if (param->write.len > 0 && param->write.value[0] == '1') {
                     ESP_LOGW(TAG, "ZAPIS I RESTART...");
@@ -169,7 +161,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
             }
             break;
 
-        // --- 3. KONIECZNA OBSŁUGA KOŃCA DŁUGIEGO ZAPISU ---
         case ESP_GATTS_EXEC_WRITE_EVT:
             ESP_LOGI(TAG, "EXEC WRITE (Koniec długiego zapisu)");
             esp_ble_gatts_send_response(gatts_if, param->exec_write.conn_id, param->exec_write.trans_id, ESP_GATT_OK, NULL);
@@ -244,7 +235,6 @@ void ble_config_stop(void) {
 // ----------------------------------------------------------------------------
 
 static void button_task(void *pvParam) {
-    // NAPRAWA: Używamy zmiennej s_btn_gpio zamiast makra BLE_CONFIG_BUTTON_GPIO
     gpio_reset_pin(s_btn_gpio);
     gpio_set_direction(s_btn_gpio, GPIO_MODE_INPUT);
     
@@ -252,7 +242,7 @@ static void button_task(void *pvParam) {
     const int interval = 100;
 
     while (1) {
-        if (gpio_get_level(s_btn_gpio) == 0) { // wciśnięty
+        if (gpio_get_level(s_btn_gpio) == 0) {
             hold_time += interval;
             if (hold_time % 1000 == 0 && hold_time > 0) ESP_LOGD(TAG, "Trzymam: %d", hold_time);
 
@@ -260,7 +250,7 @@ static void button_task(void *pvParam) {
                 ESP_LOGI(TAG, "Przycisk 4s -> START BLE");
                 
                 if (!s_ble_is_active) {
-                    ble_config_start(); // Teraz kompilator widzi prototyp na górze
+                    ble_config_start(); 
                 } else {
                     xTimerReset(s_ble_timer, 0);
                     ESP_LOGI(TAG, "Przedluzono czas BLE.");
@@ -276,8 +266,7 @@ static void button_task(void *pvParam) {
     }
 }
 
-// NAPRAWA: Funkcja musi przyjmować argument (gpio_num_t), tak jak w pliku .h
 void ble_config_init(gpio_num_t boot_btn_gpio) {
-    s_btn_gpio = boot_btn_gpio; // Przypisujemy pin do zmiennej globalnej
+    s_btn_gpio = boot_btn_gpio; 
     xTaskCreate(button_task, "ble_btn_task", 4096, NULL, 10, NULL);
 }

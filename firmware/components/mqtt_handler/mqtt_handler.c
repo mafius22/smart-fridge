@@ -99,37 +99,24 @@ void mqtt_app_stop(void) {
     }
 }
 
-// --- TU JEST GŁÓWNA ZMIANA ---
 bool mqtt_send_sensor_data(SensorData data) {
     if (client == NULL) return false;
 
-    // Pobieramy string z konfiguracji: "esp32/smartfridge/mielecDom/data"
     const char *topic_config = CONFIG_HIVE_MQTT_TOPIC; 
     
     char dynamic_topic[128];
     
-    // Szukamy ostatniego wystąpienia znaku '/'
     char *last_slash = strrchr(topic_config, '/');
 
     if (last_slash != NULL) {
-        // Obliczamy długość części przed ostatnim ukośnikiem
-        // Dla ".../mielecDom/data" będzie to długość ".../mielecDom"
         int prefix_len = last_slash - topic_config;
 
-        /*
-           Budujemy nowy temat:
-           1. %.*s -> Wypisz 'prefix_len' znaków ze stringa (czyli: esp32/smartfridge/mielecDom)
-           2. %d   -> Wstaw ID czujnika (czyli: 0)
-           3. %s   -> Wypisz resztę od ostatniego ukośnika (czyli: /data)
-        */
         snprintf(dynamic_topic, sizeof(dynamic_topic), "%.*s%d%s", 
                  prefix_len, topic_config, data.sensor_id, last_slash);
     } else {
-        // Zabezpieczenie: Jeśli w configu nie ma ukośników, po prostu doklejamy ID na koniec
         snprintf(dynamic_topic, sizeof(dynamic_topic), "%s%d", topic_config, data.sensor_id);
     }
 
-    // --- Reszta funkcji bez zmian ---
     char payload[128];
     snprintf(payload, sizeof(payload), 
              "{\"id\":%d, \"ts\":%lld, \"temp\":%.2f, \"press\":%lu}", 

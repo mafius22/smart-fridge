@@ -8,25 +8,21 @@ from app.services.push_service import send_alert
 
 logger = logging.getLogger(__name__)
 
-# Cache w RAM, żeby nie pytać bazy o ID urządzenia przy każdym requescie
 known_devices_cache = set()
 
 class MeasurementService:
     
     @staticmethod
     def get_latest_for_device(device_id):
-        """Pobiera ostatni pomiar dla urządzenia (wg czasu ESP)"""
-        # ZMIANA: Sortujemy po esp_timestamp zamiast timestamp
+        """Pobiera ostatni pomiar dla urządzenia"""
         return Measurement.query.filter_by(device_id=device_id)\
             .order_by(Measurement.esp_timestamp.desc())\
             .first()
 
     @staticmethod
     def get_measurements_in_range(start_date, end_date, device_id=None):
-        """Pobiera historię z opcjonalnym filtrem urządzenia (wg czasu ESP)"""
+        """Pobiera historię z opcjonalnym filtrem urządzenia"""
         
-        # ZMIANA: Konwersja obiektu datetime na Unix Timestamp (int), 
-        # ponieważ kolumna esp_timestamp w bazie to BigInteger.
         start_ts = int(start_date.timestamp())
         end_ts = int(end_date.timestamp())
 
@@ -38,11 +34,7 @@ class MeasurementService:
         if device_id and device_id != "ALL":
             query = query.filter(Measurement.device_id == device_id)
             
-        # ZMIANA: Sortowanie rosnąco po czasie ESP
-        # Zwraca listę obiektów Measurement, więc frontend dostanie to samo co wcześniej (przez to_dict)
         return query.order_by(Measurement.esp_timestamp.asc()).all()
-
-# --- Funkcje pomocnicze dla MQTT/HTTP POST ---
 
 def preload_cache(app):
     """Wczytuje istniejące urządzenia do RAM przy starcie aplikacji."""
@@ -64,13 +56,11 @@ def _get_or_create_device(app, device_id):
         return
 
     with app.app_context():
-        # 1. Sprawdzenie w bazie (dla pewności, jeśli cache jest pusty po restarcie)
         device = db.session.get(Device, device_id)
         if device:
             known_devices_cache.add(device_id)
             return
 
-        # 2. Tworzenie nowego urządzenia
         try:
             logger.info(f"🆕 Wykryto nowe urządzenie: {device_id} - Rejestracja...")
             
@@ -81,7 +71,6 @@ def _get_or_create_device(app, device_id):
             )
             db.session.add(new_dev)
             
-            # --- AUTOMATYCZNE PRZYPISANIE DO SUBSKRYBENTÓW ---
             all_subscribers = db.session.query(PushSubscriber).all()
             DEFAULT_THRESHOLD = 8.0 
             
@@ -109,15 +98,12 @@ def save_measurement_direct(app, item):
     Zapisuje pomiar i uruchamia sprawdzanie alertów.
     """
     try:
-        # 1. Auto-Discovery
         _get_or_create_device(app, item['dev'])
 
-        # 2. Zapis i Alert
         with app.app_context():
-            # ZMIANA: Zapisujemy esp_timestamp (item['ts']) do kolumny esp_timestamp
             stmt = insert(Measurement).values(
                 device_id=item['dev'],
-                esp_timestamp=item['ts'],  # <--- Unix Timestamp z ESP32
+                esp_timestamp=item['ts'],
                 temperature=item['temp'],
                 pressure=item['press']
             )
@@ -125,7 +111,6 @@ def save_measurement_direct(app, item):
             
             db.session.commit()
             
-            # 3. Sprawdzenie alertów (jeśli urządzenie istnieje)
             device_obj = db.session.get(Device, item['dev'])
             
             if device_obj:

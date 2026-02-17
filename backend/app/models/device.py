@@ -11,7 +11,6 @@ class Device(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
-    # Relacje: notice użycia stringów, np. 'Measurement'
     measurements = db.relationship('Measurement', backref='device', lazy='dynamic')
     subscriber_settings = db.relationship('SubscriberDeviceSettings', back_populates='device', cascade="all, delete-orphan")
 

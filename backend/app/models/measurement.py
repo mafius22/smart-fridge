@@ -6,7 +6,6 @@ class Measurement(db.Model):
     __tablename__ = 'measurements'
 
     id = db.Column(db.Integer, primary_key=True)
-    # Odwołanie do devices.id
     device_id = db.Column(db.String(50), db.ForeignKey('devices.id'), nullable=False, index=True)
     
     timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)

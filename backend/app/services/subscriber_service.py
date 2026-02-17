@@ -5,17 +5,15 @@ class SubscriberService:
     
     @staticmethod
     def register_new_subscriber(endpoint, p256dh, auth):
-        """Rejestruje nowego subskrybenta i przypisuje mu wszystkie istniejące urządzenia."""
+        """Rejestruje nowego subskrybenta."""
         existing = PushSubscriber.query.filter_by(endpoint=endpoint).first()
         if existing:
-            # Aktualizujemy klucze jeśli się zmieniły
             existing.p256dh = p256dh
             existing.auth = auth
             existing.is_active = True
             db.session.commit()
             return True, "Zaktualizowano subskrypcję", 200
 
-        # Tworzymy nowego usera
         new_sub = PushSubscriber(
             endpoint=endpoint,
             p256dh=p256dh,
@@ -23,9 +21,8 @@ class SubscriberService:
             is_active=True
         )
         db.session.add(new_sub)
-        db.session.flush()  # Nadaje ID nowemu obiektowi przed commitem
+        db.session.flush()
 
-        # --- PRZYPISANIE ISTNIEJĄCYCH URZĄDZEŃ ---
         existing_devices = Device.query.all()
         DEFAULT_THRESHOLD = 8.0
 
@@ -47,13 +44,10 @@ class SubscriberService:
         if not sub:
             return False, "Nie znaleziono subskrybenta"
 
-        # 1. Aktualizacja globalna (włącz/wyłącz powiadomienia w ogóle)
         if is_active is not None:
             sub.is_active = is_active
 
-        # 2. Aktualizacja per urządzenie (zmiana progu)
         if device_id and threshold is not None:
-            # Szukamy ustawień dla tego konkretnego urządzenia
             settings = SubscriberDeviceSettings.query.filter_by(
                 subscriber_id=sub.id, 
                 device_id=device_id
@@ -62,7 +56,6 @@ class SubscriberService:
             if settings:
                 settings.custom_threshold = float(threshold)
             else:
-                # Jeśli z jakiegoś powodu brak ustawień, tworzymy je
                 new_settings = SubscriberDeviceSettings(
                     subscriber_id=sub.id,
                     device_id=device_id,
@@ -80,10 +73,8 @@ class SubscriberService:
         if not sub:
             return None
 
-        # Pobieramy ustawienia dla urządzeń
         devices_settings = []
         for setting in sub.device_settings:
-            # setting.device to relacja do obiektu Device
             devices_settings.append({
                 "device_id": setting.device.id,
                 "device_name": setting.device.name,

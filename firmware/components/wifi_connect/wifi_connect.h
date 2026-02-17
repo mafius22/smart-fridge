@@ -4,14 +4,13 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-// 1. Inicjalizacja sterowników (wywołać RAZ w app_main na początku)
+// 1. Inicjalizacja sterowników
 void wifi_connect_init(void);
 
-// 2. Włączenie radia i nawiązanie połączenia (wywoływać w pętli)
-// Czeka na połączenie (blokujące)
+// 2. Włączenie radia i nawiązanie połączenia
 esp_err_t wifi_connect_start(void);
 
-// 3. Wyłączenie radia (wywoływać w pętli)
+// 3. Wyłączenie radia
 void wifi_connect_stop(void);
 
 // Sprawdza status

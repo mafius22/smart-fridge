@@ -8,6 +8,5 @@ class SubscriberDeviceSettings(db.Model):
     
     custom_threshold = db.Column(db.Float, default=8.0)
 
-    # Używamy stringów 'PushSubscriber' i 'Device' w relacjach, by uniknąć importów tutaj
     subscriber = db.relationship('PushSubscriber', back_populates='device_settings')
     device = db.relationship('Device', back_populates='subscriber_settings')

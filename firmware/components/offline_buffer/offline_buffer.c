@@ -6,14 +6,14 @@
 #include <unistd.h>
 
 static const char *TAG = "OFFLINE_BUF";
-static const char *FILE_PATH = "/storage/data.bin"; // Ścieżka do pliku z danymi
+static const char *FILE_PATH = "/storage/data.bin";
 
 esp_err_t offline_buffer_init(void) {
     esp_vfs_spiffs_conf_t conf = {
       .base_path = "/storage",
-      .partition_label = "storage", // Musi pasować do partitions.csv
+      .partition_label = "storage",
       .max_files = 5,
-      .format_if_mount_failed = true // Ważne: sformatuje partycję przy pierwszym użyciu!
+      .format_if_mount_failed = true
     };
 
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
@@ -38,14 +38,12 @@ esp_err_t offline_buffer_init(void) {
 }
 
 esp_err_t offline_buffer_add(SensorData data) {
-    // Otwieramy plik w trybie "append binary" (dopisywanie na końcu)
     FILE* f = fopen(FILE_PATH, "ab");
     if (f == NULL) {
         ESP_LOGE(TAG, "Failed to open file for writing");
         return ESP_FAIL;
     }
     
-    // Zapisujemy całą strukturę binarynie
     fwrite(&data, sizeof(SensorData), 1, f);
     fclose(f);
     
@@ -61,15 +59,9 @@ size_t offline_buffer_count(void) {
     return st.st_size / sizeof(SensorData);
 }
 
-// Funkcja "sprytna": 
-// 1. Zmienia nazwę pliku z danymi na tymczasowy (żeby nowe dane szły do nowego pliku).
-// 2. Otwiera tymczasowy plik i czyta wpis po wpisie.
-// 3. Próbuje wysłać wpis.
-// 4. Jeśli wysyłka się nie uda, przerywa i zachowuje resztę danych (dopisuje z powrotem).
 void offline_process_queue(send_data_callback_t send_func) {
     const char *TEMP_PATH = "/storage/processing.bin";
     
-    // Sprawdź czy mamy dane
     struct stat st;
     if (stat(FILE_PATH, &st) != 0 || st.st_size == 0) {
         return; // Pusto
@@ -77,8 +69,6 @@ void offline_process_queue(send_data_callback_t send_func) {
 
     ESP_LOGI(TAG, "Przetwarzanie bufora offline (%ld bajtow)...", st.st_size);
 
-    // Krok 1: Zmień nazwę pliku głównego na tymczasowy
-    // Dzięki temu nowe pomiary (wchodzące w trakcie wysyłania) trafią do nowego, czystego pliku
     rename(FILE_PATH, TEMP_PATH);
 
     FILE* f_temp = fopen(TEMP_PATH, "rb");
@@ -87,29 +77,23 @@ void offline_process_queue(send_data_callback_t send_func) {
     SensorData d;
     bool sending_failed = false;
     
-    // Krok 2: Czytaj i wysyłaj
     while (fread(&d, sizeof(SensorData), 1, f_temp)) {
         if (!sending_failed) {
-            bool success = send_func(d); // Próba wysyłki (np. MQTT)
+            bool success = send_func(d);
             if (!success) {
                 sending_failed = true;
                 ESP_LOGW(TAG, "Wysylka nieudana, zachowuje reszte danych...");
             }
         }
 
-        // Krok 3: Jeśli wysyłka padła, musimy przywrócić ten rekord (i kolejne)
         if (sending_failed) {
-            // Dopisujemy z powrotem do głównego pliku (na jego początek lub koniec)
-            // Tutaj prosta wersja: dopisujemy na koniec obecnego (nowego) pliku
             offline_buffer_add(d); 
         } else {
-            // Sukces - po prostu nie zapisujemy tego rekordu nigdzie, czyli "usuwamy" go
             ESP_LOGI(TAG, "Rekord z %lld wyslany!", d.timestamp);
         }
     }
 
     fclose(f_temp);
     
-    // Krok 4: Usuwamy plik tymczasowy (bo dane albo wysłane, albo przepisane)
     unlink(TEMP_PATH);
 }

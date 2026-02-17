@@ -6,7 +6,7 @@
 // Inicjalizacja komponentu i start taska przycisku
 void ble_config_init(gpio_num_t boot_btn_gpio);
 
-// Ręczne zatrzymanie (opcjonalne)
+// Ręczne zatrzymanie
 void ble_config_stop(void);
 
 #endif // BLE_CONFIG_H

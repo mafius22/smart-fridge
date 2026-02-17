@@ -1,41 +1,33 @@
+Smart Fridge
+==================
 
-> **Status:** W trakcie rozwoju
-
-# Smart Fridge
-
-System monitorowania temperatury w chłodniach dla handlu i gastronomii.
-
+## Cel Systemu
+Zapewnienie ciągłego nadzoru nad warunkami przechowywania produktów w obiektach gastronomicznych i handlowych. System samodzielnie rejestruje dane i wysyła natychmiastowe powiadomienia o awariach, zapobiegając psuciu się żywności.
 
 ## Architektura Systemu
 
-System zaprojektowano w architekturze mikrousługowej:
-
-1.  **Urządzenie:** ESP32 zbiera dane i zarządza logiką połączeń.
-2.  **Transport:** Protokół MQTT.
+1.  **Urządzenie:** ESP32 zbiera i wysyła dane na server.
 3.  **Backend:** Serwer Flask przetwarza dane i zarządza alarmami.
-4.  **Prezentacja:** Aplikacja reactowa do wizualizacji i konfiguracji.
+4.  **Frontend:** Aplikacja reactowa do wizualizacji, konfiguracji oraz odbierania powiadomień.
 
-### Schemat przepływu danych
-`[Czujnik] -> (I2C/1-Wire) -> [ESP32] -> (MQTT) -> [Mosquitto Broker] -> [Backend Service] -> [Frontend Service]`
-
----
 
 ## Technologie
 
-### Firmware (`/firmware`)
+### `/firmware`
+* **Język:** C
 * **MCU:** ESP32
-* **Framework:** ESP-IDF (C/C++), FreeRTOS
-* **Czujniki:**
-    * *Produkcja:* DS18B20
+* **Framework:** ESP-IDF, FreeRTOS
+* **Czujniki:** DS18B20
 
-### Backend (`/backend`)
-* **Język:** Python 3.10+
-* **Framework:** Flask (REST API)
+### `/backend`
+* **Język:** Python
+* **Framework:** Flask
 * **Baza Danych:** SQLite + SQLAlchemy ORM
 * **MQTT:** Paho-MQTT
 * **Push:** PyWebPush
 
-### Frontend (`/frontend`)
+### `/frontend`
+* **Język:** JS
 * **Framework:** React + Vite
 * **HTTP Klient:** Axios
 * **Service Worker:** Obsługa powiadomień w tle i PWA
@@ -47,6 +39,6 @@ System zaprojektowano w architekturze mikrousługowej:
 ```text
 smart-fridge/
 ├── backend/            # Logika serwerowa
-├── docs/               # Dokumentacja, schematy, notatki
-├── firmware/           # Kod źródłowy ESP32 (ESP-IDF)
+├── docs/               # Notatki
+├── firmware/           # Kod źródłowy ESP32
 └── frontend/           # Aplikacji React

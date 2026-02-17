@@ -9,5 +9,4 @@ class PushSubscriber(db.Model):
     auth = db.Column(db.String(255), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
     
-    # Relacja do settings
     device_settings = db.relationship('SubscriberDeviceSettings', back_populates='subscriber', cascade="all, delete-orphan")

@@ -17,17 +17,17 @@ DEVICES = ["lodowka_kuchnia", "zamrazarka_piwnica", "chlodziarka_wino"]
 
 INTERVAL_S = 20
 
-MQTT_USER = os.getenv("MQTT_LOGIN", "twoj_login") # Ustaw poprawne lub None
-MQTT_PASS = os.getenv("MQTT_PASS", "twoje_haslo") # Ustaw poprawne lub None
+MQTT_USER = os.getenv("MQTT_LOGIN", "twoj_login")
+MQTT_PASS = os.getenv("MQTT_PASS", "twoje_haslo")
 
 def unix_ts() -> int:
     return int(datetime.now(timezone.utc).timestamp())
 
 def make_payload(device_name) -> dict:
     if "zamrazarka" in device_name:
-        temp = round(random.uniform(-25.0, -15.0), 1) # Mroźno
+        temp = round(random.uniform(-25.0, -15.0), 1)
     else:
-        temp = round(random.uniform(8.0, 10.0), 1)     # Chłodno
+        temp = round(random.uniform(8.0, 10.0), 1)  
         
     press = random.randint(98000, 103000)
     return {"ts": unix_ts(), "temp": temp, "press": press}
@@ -47,21 +47,16 @@ def main():
 
         while True:
             for device_id in DEVICES:
-                # 1. Tworzymy unikalny temat dla urządzenia
                 topic = f"{BASE_TOPIC}/{device_id}/data"
                 
-                # 2. Generujemy dane
                 payload = make_payload(device_id)
                 msg = json.dumps(payload, separators=(",", ":"))
                 
-                # 3. Wysyłamy
                 info = client.publish(topic, msg, qos=1)
                 info.wait_for_publish()
 
                 print(f"[{device_id}] Wysłano na {topic}: {msg}")
                 
-                # Małe opóźnienie między urządzeniami, żeby nie zalać logów w jednej milisekundzie
-
             print("-" * 40)
             time.sleep(INTERVAL_S)
 

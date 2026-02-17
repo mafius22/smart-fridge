@@ -14,5 +14,3 @@ projekt do sprawdzania temperatury w lodówkach w sklepie
 - pokazywanie aktualnych temperatur w lodówkach
 - pokazywanie wykresów temperatury od czasu
 - wysyłanie powiadomienia kiedy temperatura w ladowce spadnie poza ustawiona przez użytkownika temperaturę i bedzie sie utrzymywac przez jakis czas
-
-
