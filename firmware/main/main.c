@@ -8,8 +8,9 @@
 #include "driver/gpio.h"
 #include "esp_event.h"
 #include <sys/time.h>
-#include <time.h>         
-#include "esp_sntp.h"     
+#include <time.h>        
+#include "esp_sntp.h"   
+#include <stdbool.h>   
 
 #include "onewire_bus.h"
 #include "ds18b20.h"
@@ -25,6 +26,10 @@ static const char *TAG = "MAIN_SYSTEM";
 // Konfiguracja
 #define SENSOR_GPIO  GPIO_NUM_4
 #define MAX_SENSORS  10  
+#define LOOP_DELAY_MS 300000 // 5 minut
+
+// Flaga globalna (musi być ustawiana przez mqtt_handler/ota_manager)
+bool g_ota_trwa = false;
 
 // --- FUNKCJA DO POBIERANIA CZASU---
 static void obtain_time(void) {
@@ -95,6 +100,7 @@ SensorData get_ds18b20_reading(ds18b20_device_handle_t sensor_handle) {
 }
 
 void app_main(void) {
+    // 1. Inicjalizacja podstawowa
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
       ESP_ERROR_CHECK(nvs_flash_erase());
@@ -108,6 +114,7 @@ void app_main(void) {
     ble_config_init(GPIO_NUM_0); 
     wifi_connect_init();
 
+    // 2. Inicjalizacja OneWire (wykonujemy raz przed pętlą)
     onewire_bus_handle_t bus = NULL;
     onewire_bus_config_t bus_config = {
         .bus_gpio_num = SENSOR_GPIO,
@@ -117,34 +124,41 @@ void app_main(void) {
     };
     
     ESP_LOGI(TAG, "Inicjalizacja OneWire na GPIO %d...", SENSOR_GPIO);
-    ESP_ERROR_CHECK(onewire_new_bus_rmt(&bus_config, &rmt_config, &bus));
+    // Sprawdzamy błąd, ale nie zabijamy programu (może nie być czujników)
+    if (onewire_new_bus_rmt(&bus_config, &rmt_config, &bus) != ESP_OK) {
+        ESP_LOGE(TAG, "Błąd inicjalizacji OneWire Bus!");
+    }
 
     int ds18b20_device_num = 0;
     ds18b20_device_handle_t ds18b20s[MAX_SENSORS];
-    onewire_device_iter_handle_t iter = NULL;
-    onewire_device_t next_onewire_device;
-    esp_err_t search_result = ESP_OK;
-
-    ESP_ERROR_CHECK(onewire_new_device_iter(bus, &iter));
-    ESP_LOGI(TAG, "Szukanie urządzeń...");
-
-    do {
-        search_result = onewire_device_iter_get_next(iter, &next_onewire_device);
-        if (search_result == ESP_OK) { 
-            ds18b20_config_t ds_cfg = {};
-            if (ds18b20_new_device_from_enumeration(&next_onewire_device, &ds_cfg, &ds18b20s[ds18b20_device_num]) == ESP_OK) {
-                ESP_LOGI(TAG, "Znaleziono DS18B20 -> ID: %d", ds18b20_device_num);
-                ds18b20_device_num++;
-            }
-        }
-    } while (search_result != ESP_ERR_NOT_FOUND && ds18b20_device_num < MAX_SENSORS);
     
-    ESP_ERROR_CHECK(onewire_del_device_iter(iter));
-    ESP_LOGI(TAG, "Znaleziono łącznie: %d czujników.", ds18b20_device_num);
+    if (bus) {
+        onewire_device_iter_handle_t iter = NULL;
+        onewire_device_t next_onewire_device;
+        esp_err_t search_result = ESP_OK;
+
+        onewire_new_device_iter(bus, &iter);
+        ESP_LOGI(TAG, "Szukanie urządzeń...");
+
+        do {
+            search_result = onewire_device_iter_get_next(iter, &next_onewire_device);
+            if (search_result == ESP_OK) { 
+                ds18b20_config_t ds_cfg = {};
+                if (ds18b20_new_device_from_enumeration(&next_onewire_device, &ds_cfg, &ds18b20s[ds18b20_device_num]) == ESP_OK) {
+                    ESP_LOGI(TAG, "Znaleziono DS18B20 -> ID: %d", ds18b20_device_num);
+                    ds18b20_device_num++;
+                }
+            }
+        } while (search_result != ESP_ERR_NOT_FOUND && ds18b20_device_num < MAX_SENSORS);
+        
+        onewire_del_device_iter(iter);
+        ESP_LOGI(TAG, "Znaleziono łącznie: %d czujników.", ds18b20_device_num);
+    }
 
     vTaskDelay(pdMS_TO_TICKS(1000));
     int cycle_counter = 0;
 
+    // 3. Główna pętla nieskończona
     while (1) {
         cycle_counter++;
         ESP_LOGI(TAG, "\n================ CYKL #%d ================", cycle_counter);
@@ -162,6 +176,7 @@ void app_main(void) {
             if (mqtt_app_start()) {
                 mqtt_ready = true;
                 
+                // Jeśli mamy dane w buforze, wyślij je teraz
                 if (offline_buffer_count() > 0) {
                     ESP_LOGW(TAG, "Wysyłanie bufora offline...");
                     offline_process_queue(mqtt_send_sensor_data);
@@ -182,6 +197,7 @@ void app_main(void) {
              ESP_LOGW(TAG, "⚠️ CZAS NIEPRAWIDŁOWY (1970). Dane nie będą buforowane!");
         }
 
+        // Odczyt czujników
         if (ds18b20_device_num > 0) {
             for (int i = 0; i < ds18b20_device_num; i++) {
                 ESP_LOGI(TAG, "--- Czujnik %d ---", i);
@@ -213,12 +229,30 @@ void app_main(void) {
             ESP_LOGE(TAG, "BRAK CZUJNIKÓW!");
         }
 
-        if (is_online) {
+        // --- KLUCZOWE: OCHRONA OTA ---
+        // Sprawdzamy, czy trwa OTA zanim odłączymy sieć
+        if (g_ota_trwa) {
+            ESP_LOGW(TAG, "*********** TRWA OTA - WSTRZYMUJE ROZLACZANIE ***********");
+            ESP_LOGW(TAG, "Nie wylaczam WiFi, czekam na zakonczenie aktualizacji...");
+            
+            // Pętla czekająca na zakończenie OTA
+            while (g_ota_trwa) {
+                // Tutaj system "wisi" i pozwala działać procesowi OTA w tle.
+                // Jeśli OTA się uda -> nastąpi restart systemu.
+                // Jeśli OTA się nie uda -> flaga g_ota_trwa zmieni się na false (w ota_manager).
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+            ESP_LOGW(TAG, "Flaga OTA zgasla (blad lub timeout). Kontynuuje petle.");
+        }
+
+        // Rozłączamy tylko wtedy, gdy OTA NIE TRWA
+        if (is_online && !g_ota_trwa) {
+            ESP_LOGI(TAG, "Zamykanie połączeń na czas przerwy...");
             mqtt_app_stop();
             wifi_connect_stop();
         }
 
         ESP_LOGI(TAG, "[SLEEP] Czekam 5 minut...");
-        vTaskDelay(pdMS_TO_TICKS(300000));
+        vTaskDelay(pdMS_TO_TICKS(LOOP_DELAY_MS));
     }
 }
