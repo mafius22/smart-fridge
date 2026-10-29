@@ -18,10 +18,4 @@ menu "Konfiguracja MQTT (HiveMQ)"
         help
             Hasło użytkownika.
 
-    config HIVE_MQTT_TOPIC
-        string "Topic"
-        default "ala/ma/kota"
-        help
-            Temat, pod którym ESP32 będzie publikować dane.
-
 endmenu

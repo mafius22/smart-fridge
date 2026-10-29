@@ -6,7 +6,20 @@
 #include <unistd.h>
 
 static const char *TAG = "OFFLINE_BUF";
-static const char *FILE_PATH = "/storage/data.bin";
+// Rekord zawiera ROM czujnika zamiast jego numeru - nowe pliki, zeby nie czytac starego formatu
+static const char *FILE_PATH = "/storage/buf_v2.bin";
+static const char *TEMP_PATH = "/storage/buf_v2_tmp.bin";
+
+// Pliki bufora w starym formacie (sensor_id = numer z kolejnosci wykrycia)
+static const char *OLD_FILE_PATH = "/storage/data.bin";
+static const char *OLD_TEMP_PATH = "/storage/processing.bin";
+
+void sensor_rom_to_str(uint64_t rom, char *out) {
+    // Bajty w kolejnosci nadawania na magistrali: kod rodziny (0x28) pierwszy, CRC ostatni
+    for (int i = 0; i < 8; i++) {
+        sprintf(out + i * 2, "%02x", (unsigned)((rom >> (8 * i)) & 0xFF));
+    }
+}
 
 esp_err_t offline_buffer_init(void) {
     esp_vfs_spiffs_conf_t conf = {
@@ -34,6 +47,13 @@ esp_err_t offline_buffer_init(void) {
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
     }
+
+    // Starego formatu nie da sie poprawnie odczytac - usuwamy
+    bool old_data = (unlink(OLD_FILE_PATH) == 0);
+    bool old_temp = (unlink(OLD_TEMP_PATH) == 0);
+    if (old_data || old_temp) {
+        ESP_LOGW(TAG, "Usunieto bufor w starym formacie");
+    }
     return ESP_OK;
 }
 
@@ -47,7 +67,9 @@ esp_err_t offline_buffer_add(SensorData data) {
     fwrite(&data, sizeof(SensorData), 1, f);
     fclose(f);
     
-    ESP_LOGI(TAG, "Zapisano offline [TS:%lld]: T:%.2f C, P:%lu Pa", data.timestamp, data.temp, data.pressure);
+    char rom_str[SENSOR_ROM_STR_LEN];
+    sensor_rom_to_str(data.sensor_rom, rom_str);
+    ESP_LOGI(TAG, "Zapisano offline [TS:%lld] [%s]: T:%.2f C", data.timestamp, rom_str, data.temp);
     return ESP_OK;
 }
 
@@ -60,8 +82,6 @@ size_t offline_buffer_count(void) {
 }
 
 void offline_process_queue(send_data_callback_t send_func) {
-    const char *TEMP_PATH = "/storage/processing.bin";
-    
     struct stat st;
     if (stat(FILE_PATH, &st) != 0 || st.st_size == 0) {
         return; // Pusto

@@ -7,11 +7,16 @@
 
 // Struktura pojedynczego pomiaru
 typedef struct {
-    int64_t timestamp; // Unix timestamp
-    float temp;
-    uint32_t pressure;
-    int sensor_id;
+    int64_t timestamp;   // Unix timestamp
+    uint64_t sensor_rom; // 64-bitowy adres ROM czujnika DS18B20
+    float temp;          // -127.0 = blad odczytu
 } SensorData;
+
+// Dlugosc tekstu z adresem ROM: 16 znakow hex + '\0'
+#define SENSOR_ROM_STR_LEN 17
+
+// Zamienia adres ROM na tekst, np. "28ff4a1b0c160354"
+void sensor_rom_to_str(uint64_t rom, char *out);
 
 // Montuje system plików
 esp_err_t offline_buffer_init(void);

@@ -5,8 +5,9 @@
 #include "esp_crt_bundle.h"
 #include "offline_buffer.h" 
 #include <string.h>
-#include "esp_system.h" 
-#include "ota_manager.h" 
+#include "esp_system.h"
+#include "esp_mac.h"
+#include "ota_manager.h"
 #include <stdbool.h>
 
 static const char *TAG = "MQTT_HANDLER";
@@ -21,10 +22,34 @@ void mqtt_app_stop(void);
 #define MQTT_BROKER_URI     CONFIG_HIVE_MQTT_BROKER_URI
 #define MQTT_USERNAME       CONFIG_HIVE_MQTT_USERNAME
 #define MQTT_PASSWORD       CONFIG_HIVE_MQTT_PASSWORD
-#define MQTT_TOPIC_BASE     CONFIG_HIVE_MQTT_TOPIC 
 
-#define MQTT_TOPIC_RESET    "esp32/reset" 
-#define MQTT_TOPIC_UPDATE   "esp32/update" 
+#define MQTT_TOPIC_PREFIX   "sf/v1"
+
+// Nazwa plytki z adresu MAC"
+static char s_device_id[16];
+static char s_topic_data[64];   // sf/v1/{id}/data   - pomiary
+static char s_topic_reset[64];  // sf/v1/{id}/reset  - "1" = restart
+static char s_topic_update[64]; // sf/v1/{id}/update - link do OTA
+
+static void init_device_topics(void) {
+    if (s_device_id[0] != '\0') return; // juz policzone
+
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(s_device_id, sizeof(s_device_id), "sf-%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    snprintf(s_topic_data, sizeof(s_topic_data), MQTT_TOPIC_PREFIX "/%s/data", s_device_id);
+    snprintf(s_topic_reset, sizeof(s_topic_reset), MQTT_TOPIC_PREFIX "/%s/reset", s_device_id);
+    snprintf(s_topic_update, sizeof(s_topic_update), MQTT_TOPIC_PREFIX "/%s/update", s_device_id);
+
+    ESP_LOGI(TAG, "ID plytki: %s", s_device_id);
+}
+
+// Dokladne porownanie tematu (event->topic nie jest zakonczony zerem)
+static bool topic_is(esp_mqtt_event_handle_t event, const char *topic) {
+    return event->topic_len == (int)strlen(topic) && memcmp(event->topic, topic, event->topic_len) == 0;
+}
 
 // Flagi zdarzeń
 static EventGroupHandle_t s_mqtt_event_group;
@@ -43,10 +68,10 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             ESP_LOGI(TAG, "MQTT Polaczono z: %s", MQTT_BROKER_URI);
             xEventGroupSetBits(s_mqtt_event_group, MQTT_CONNECTED_BIT);
             
-            esp_mqtt_client_subscribe(client, MQTT_TOPIC_RESET, 0);
-            esp_mqtt_client_subscribe(client, MQTT_TOPIC_UPDATE, 0);
-            
-            ESP_LOGI(TAG, "Zasubskrybowano tematy: %s oraz %s", MQTT_TOPIC_RESET, MQTT_TOPIC_UPDATE);
+            esp_mqtt_client_subscribe(client, s_topic_reset, 0);
+            esp_mqtt_client_subscribe(client, s_topic_update, 0);
+
+            ESP_LOGI(TAG, "Zasubskrybowano tematy: %s oraz %s", s_topic_reset, s_topic_update);
             break;
             
         case MQTT_EVENT_DISCONNECTED:
@@ -62,17 +87,18 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             ESP_LOGI(TAG, "Odebrano na temat: %.*s", event->topic_len, event->topic);
 
             // --- OBSŁUGA RESETU ---
-            if (strncmp(event->topic, MQTT_TOPIC_RESET, event->topic_len) == 0) {
-                if (strncmp(event->data, "1", event->data_len) == 0) {
+            if (topic_is(event, s_topic_reset)) {
+                // Pusta wiadomosc (czyszczenie retain) nie moze wywolac restartu
+                if (event->data_len == 1 && event->data[0] == '1') {
                     ESP_LOGW(TAG, "!!! KOMENDA RESETU !!!");
-                    esp_mqtt_client_publish(client, MQTT_TOPIC_RESET, "", 0, 1, 1); // Czyść temat
+                    esp_mqtt_client_publish(client, s_topic_reset, "", 0, 1, 1); // Czyść temat
                     vTaskDelay(pdMS_TO_TICKS(2000));
                     esp_restart();
                 }
             }
             
             // --- OBSŁUGA OTA (AKTUALIZACJI) ---
-            else if (strncmp(event->topic, MQTT_TOPIC_UPDATE, event->topic_len) == 0) {
+            else if (topic_is(event, s_topic_update)) {
                 
                 // 1. OCHRONA PRZED PĘTLĄ: Ignoruj puste wiadomości (czyszczące)
                 if (event->data_len < 10) {
@@ -100,7 +126,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                 
                 // 4. CZYŚCIMY TEMAT (Retain)
                 // To wyśle pustą wiadomość, która wróci do nas, ale "if" na górze ją zablokuje
-                esp_mqtt_client_publish(client, MQTT_TOPIC_UPDATE, "", 0, 1, 1);
+                esp_mqtt_client_publish(client, s_topic_update, "", 0, 1, 1);
                 
                 // 5. START OTA
                 ota_start(url);
@@ -126,9 +152,12 @@ bool mqtt_app_start(void) {
     }
     xEventGroupClearBits(s_mqtt_event_group, MQTT_CONNECTED_BIT | MQTT_FAIL_BIT);
 
+    init_device_topics();
+
     const esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = MQTT_BROKER_URI,
         .broker.address.port = 8883,
+        .credentials.client_id = s_device_id,
         .credentials.username = MQTT_USERNAME,
         .credentials.authentication.password = MQTT_PASSWORD,
         .broker.verification.crt_bundle_attach = esp_crt_bundle_attach, // Certyfikaty Vercel/SSL
@@ -166,28 +195,18 @@ void mqtt_app_stop(void) {
 bool mqtt_send_sensor_data(SensorData data) {
     if (client == NULL) return false;
 
-    const char *topic_config = CONFIG_HIVE_MQTT_TOPIC; 
-    char dynamic_topic[128];
-    char *last_slash = strrchr(topic_config, '/');
-
-    // Budowanie tematu: jesli konczy sie slashem lub nie
-    if (last_slash != NULL) {
-        int prefix_len = last_slash - topic_config;
-        snprintf(dynamic_topic, sizeof(dynamic_topic), "%.*s%d%s", 
-                 prefix_len, topic_config, data.sensor_id, last_slash);
-    } else {
-        snprintf(dynamic_topic, sizeof(dynamic_topic), "%s%d", topic_config, data.sensor_id);
-    }
+    char rom_str[SENSOR_ROM_STR_LEN];
+    sensor_rom_to_str(data.sensor_rom, rom_str);
 
     char payload[128];
-    // JSON Payload
-    snprintf(payload, sizeof(payload), 
-             "{\"id\":%d, \"ts\":%lld, \"temp\":%.2f, \"press\":%lu}", 
-             data.sensor_id, data.timestamp, data.temp, (unsigned long)data.pressure);
+    // JSON Payload: czujnik rozpoznawany po ROM, plytka po temacie
+    snprintf(payload, sizeof(payload),
+             "{\"sid\":\"%s\",\"ts\":%lld,\"temp\":%.2f}",
+             rom_str, data.timestamp, data.temp);
 
     xEventGroupClearBits(s_mqtt_event_group, MQTT_PUBLISHED_BIT);
 
-    int msg_id = esp_mqtt_client_publish(client, dynamic_topic, payload, 0, 1, 0);
+    int msg_id = esp_mqtt_client_publish(client, s_topic_data, payload, 0, 1, 0);
     
     if (msg_id == -1) {
         ESP_LOGE(TAG, "Blad kolejkowania wiadomosci");
@@ -199,7 +218,7 @@ bool mqtt_send_sensor_data(SensorData data) {
         pdTRUE, pdFALSE, pdMS_TO_TICKS(5000));
 
     if (bits & MQTT_PUBLISHED_BIT) {
-        ESP_LOGI(TAG, "Wyslano na [%s]: %s", dynamic_topic, payload);
+        ESP_LOGI(TAG, "Wyslano na [%s]: %s", s_topic_data, payload);
         return true;
     } else {
         ESP_LOGE(TAG, "Timeout potwierdzenia wysylki");

@@ -69,6 +69,25 @@ static void obtain_time(void) {
     }
 }
 
+// Wartosc rejestru temperatury DS18B20 zaraz po wlaczeniu zasilania
+#define DS18B20_POR_TEMP 85.0f
+
+static esp_err_t read_ds18b20_once(ds18b20_device_handle_t sensor_handle, float *temperature) {
+    esp_err_t err = ds18b20_trigger_temperature_conversion(sensor_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Czujnik nie odpowiada na komende konwersji: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(800));
+
+    err = ds18b20_get_temperature(sensor_handle, temperature);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Błąd odczytu temperatury (CRC/Timeout)");
+    }
+    return err;
+}
+
 SensorData get_ds18b20_reading(ds18b20_device_handle_t sensor_handle) {
     SensorData d;
     
@@ -76,30 +95,35 @@ SensorData get_ds18b20_reading(ds18b20_device_handle_t sensor_handle) {
     gettimeofday(&tv, NULL);
     d.timestamp = (int64_t)tv.tv_sec;
 
-    d.temp = -127.0; 
-    d.pressure = 0;  
-    d.sensor_id = -1;
+    d.temp = -127.0;
+    d.sensor_rom = 0;
 
     if (sensor_handle == NULL) {
         ESP_LOGE(TAG, "Uchwyt czujnika jest NULL");
         return d;
     }
 
-    esp_err_t err = ds18b20_trigger_temperature_conversion(sensor_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Czujnik nie odpowiada na komende konwersji: %s", esp_err_to_name(err));
+    // ROM ustawiamy przed pomiarem - przy bledzie (-127) wiadomo, ktory czujnik nie odpowiada
+    ds18b20_get_device_address(sensor_handle, &d.sensor_rom);
+
+    float temperature;
+    if (read_ds18b20_once(sensor_handle, &temperature) != ESP_OK) {
         return d;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(800));
-
-    float temperature;
-    if (ds18b20_get_temperature(sensor_handle, &temperature) == ESP_OK) {
-        d.temp = temperature;
-    } else {
-        ESP_LOGE(TAG, "Błąd odczytu temperatury (CRC/Timeout)");
+    // 85.0 to nie pomiar, tylko wartosc startowa rejestru po zaniku zasilania czujnika
+    if (temperature == DS18B20_POR_TEMP) {
+        ESP_LOGW(TAG, "Odczyt 85.0 st. C (reset zasilania czujnika?) - ponawiam pomiar");
+        if (read_ds18b20_once(sensor_handle, &temperature) != ESP_OK) {
+            return d;
+        }
+        if (temperature == DS18B20_POR_TEMP) {
+            ESP_LOGE(TAG, "Ponownie 85.0 st. C - traktuje jako blad czujnika");
+            return d;
+        }
     }
-    
+
+    d.temp = temperature;
     return d;
 }
 
@@ -149,7 +173,9 @@ void app_main(void) {
             if (search_result == ESP_OK) { 
                 ds18b20_config_t ds_cfg = {};
                 if (ds18b20_new_device_from_enumeration(&next_onewire_device, &ds_cfg, &ds18b20s[ds18b20_device_num]) == ESP_OK) {
-                    ESP_LOGI(TAG, "Znaleziono DS18B20 -> ID: %d", ds18b20_device_num);
+                    char rom_str[SENSOR_ROM_STR_LEN];
+                    sensor_rom_to_str(next_onewire_device.address, rom_str);
+                    ESP_LOGI(TAG, "Znaleziono DS18B20 -> ROM: %s", rom_str);
                     ds18b20_device_num++;
                 }
             }
@@ -207,9 +233,10 @@ void app_main(void) {
                 ESP_LOGI(TAG, "--- Czujnik %d ---", i);
 
                 SensorData current_data = get_ds18b20_reading(ds18b20s[i]);
-                current_data.sensor_id = i; 
 
-                ESP_LOGI(TAG, "Odczyt ID[%d]: %.2f st. C", i, current_data.temp);
+                char rom_str[SENSOR_ROM_STR_LEN];
+                sensor_rom_to_str(current_data.sensor_rom, rom_str);
+                ESP_LOGI(TAG, "Odczyt [%s]: %.2f st. C", rom_str, current_data.temp);
 
                 if (mqtt_ready) {
                     if (!mqtt_send_sensor_data(current_data)) {
