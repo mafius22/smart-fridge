@@ -25,7 +25,7 @@ void mqtt_app_stop(void);
 
 #define MQTT_TOPIC_PREFIX   "sf/v1"
 
-// Nazwa plytki z adresu MAC"
+// Nazwa plytki z adresu MAC
 static char s_device_id[16];
 static char s_topic_data[64];   // sf/v1/{id}/data   - pomiary
 static char s_topic_reset[64];  // sf/v1/{id}/reset  - "1" = restart
@@ -67,7 +67,10 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT Polaczono z: %s", MQTT_BROKER_URI);
             xEventGroupSetBits(s_mqtt_event_group, MQTT_CONNECTED_BIT);
-            
+
+            // Polaczenie dziala - nowy firmware po OTA moze odbierac kolejne aktualizacje
+            ota_confirm_app_valid();
+
             esp_mqtt_client_subscribe(client, s_topic_reset, 0);
             esp_mqtt_client_subscribe(client, s_topic_update, 0);
 

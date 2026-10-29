@@ -20,6 +20,7 @@
 #include "wifi_connect.h"
 #include "ble_config.h"
 #include "mqtt_handler.h"
+#include "ota_manager.h"
 
 static const char *TAG = "MAIN_SYSTEM";
 
@@ -135,6 +136,9 @@ void app_main(void) {
       ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    // Pierwszy start po OTA: bez polaczenia z MQTT w 15 min wracamy do poprzedniego firmware
+    ota_rollback_guard_start();
 
     storage_init();
     ESP_ERROR_CHECK(esp_event_loop_create_default());
