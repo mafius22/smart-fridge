@@ -23,6 +23,8 @@ static const char *TAG = "BLE_CONFIG";
 #define DEVICE_NAME             "ESP32_SMART_FRIDGE"
 #define BUTTON_HOLD_TIME_MS     4000
 #define BLE_TIMEOUT_MS          (5 * 60 * 1000)
+#define LED_GPIO                GPIO_NUM_2
+#define LED_BLINK_MS            500
 
 // --- UUID ---
 #define GATTS_SERVICE_UUID_TEST   0x00FF
@@ -35,6 +37,7 @@ static const char *TAG = "BLE_CONFIG";
 static TimerHandle_t s_ble_timer = NULL;
 static gpio_num_t s_btn_gpio = GPIO_NUM_0;
 static bool s_ble_is_active = false;
+static bool s_ble_connected = false;
 
 static char s_wifi_ssid[33] = {0};
 static char s_wifi_pass[65] = {0};
@@ -168,11 +171,13 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 
         case ESP_GATTS_CONNECT_EVT:
             ESP_LOGI(TAG, "CONNECTED");
+            s_ble_connected = true;
             if (s_ble_timer) xTimerReset(s_ble_timer, 0);
             break;
 
         case ESP_GATTS_DISCONNECT_EVT:
             ESP_LOGI(TAG, "DISCONNECTED");
+            s_ble_connected = false;
             esp_ble_gap_start_advertising(&(esp_ble_adv_params_t){
                 .adv_int_min = 0x20, .adv_int_max = 0x40,
                 .adv_type = ADV_TYPE_IND, .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
@@ -218,11 +223,12 @@ static void ble_config_stop_internal(void) {
     esp_bt_controller_disable();
     esp_bt_controller_deinit();
     s_ble_is_active = false;
+    s_ble_connected = false;
     ESP_LOGI(TAG, "BLE wylaczone.");
 }
 
 static void ble_timeout_callback(TimerHandle_t xTimer) {
-    ESP_LOGW(TAG, "Timeout 3 min - wylaczam BLE.");
+    ESP_LOGW(TAG, "Timeout 5 min - wylaczam BLE.");
     ble_config_stop_internal();
 }
 
@@ -237,31 +243,55 @@ void ble_config_stop(void) {
 static void button_task(void *pvParam) {
     gpio_reset_pin(s_btn_gpio);
     gpio_set_direction(s_btn_gpio, GPIO_MODE_INPUT);
-    
+
+    gpio_reset_pin(LED_GPIO);
+    gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_GPIO, 0);
+
     int hold_time = 0;
     const int interval = 100;
+    int led_ticks = 0;
+    bool led_on = false;
+    bool wait_release = false;
 
     while (1) {
         if (gpio_get_level(s_btn_gpio) == 0) {
-            hold_time += interval;
-            if (hold_time % 1000 == 0 && hold_time > 0) ESP_LOGD(TAG, "Trzymam: %d", hold_time);
+            if (!wait_release) {
+                hold_time += interval;
+                if (hold_time % 1000 == 0 && hold_time > 0) ESP_LOGD(TAG, "Trzymam: %d", hold_time);
 
-            if (hold_time >= BUTTON_HOLD_TIME_MS) {
-                ESP_LOGI(TAG, "Przycisk 4s -> START BLE");
-                
-                if (!s_ble_is_active) {
-                    ble_config_start(); 
-                } else {
-                    xTimerReset(s_ble_timer, 0);
-                    ESP_LOGI(TAG, "Przedluzono czas BLE.");
+                if (hold_time >= BUTTON_HOLD_TIME_MS) {
+                    ESP_LOGI(TAG, "Przycisk 4s -> START BLE");
+
+                    if (!s_ble_is_active) {
+                        ble_config_start();
+                        led_on = true;
+                        led_ticks = 0;
+                    } else {
+                        xTimerReset(s_ble_timer, 0);
+                        ESP_LOGI(TAG, "Przedluzono czas BLE.");
+                    }
+
+                    wait_release = true;
                 }
-
-                while (gpio_get_level(s_btn_gpio) == 0) vTaskDelay(pdMS_TO_TICKS(10));
-                hold_time = 0;
             }
         } else {
             hold_time = 0;
+            wait_release = false;
         }
+
+        // Dioda: miga = rozglaszanie, swieci = telefon polaczony, zgaszona = BLE wylaczone
+        if (s_ble_is_active && !s_ble_connected) {
+            if (++led_ticks >= LED_BLINK_MS / interval) {
+                led_ticks = 0;
+                led_on = !led_on;
+            }
+        } else {
+            led_ticks = 0;
+            led_on = s_ble_is_active;
+        }
+        gpio_set_level(LED_GPIO, led_on);
+
         vTaskDelay(pdMS_TO_TICKS(interval));
     }
 }
