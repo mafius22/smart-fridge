@@ -85,8 +85,12 @@ SensorData get_ds18b20_reading(ds18b20_device_handle_t sensor_handle) {
         return d;
     }
 
-    ESP_ERROR_CHECK(ds18b20_trigger_temperature_conversion(sensor_handle));
-    
+    esp_err_t err = ds18b20_trigger_temperature_conversion(sensor_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Czujnik nie odpowiada na komende konwersji: %s", esp_err_to_name(err));
+        return d;
+    }
+
     vTaskDelay(pdMS_TO_TICKS(800));
 
     float temperature;
