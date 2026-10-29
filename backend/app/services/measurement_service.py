@@ -62,7 +62,7 @@ def _get_or_create_device(app, device_id):
             return
 
         try:
-            logger.info(f"🆕 Wykryto nowe urządzenie: {device_id} - Rejestracja...")
+            logger.info(f"Wykryto nowe urządzenie: {device_id} - Rejestracja...")
             
             new_dev = Device(
                 id=device_id,
@@ -81,7 +81,7 @@ def _get_or_create_device(app, device_id):
                     custom_threshold=DEFAULT_THRESHOLD
                 )
                 db.session.add(settings)
-                logger.info(f"➕ Przypisano nowe urządzenie {device_id} do subskrybenta {sub.id}")
+                logger.info(f"Przypisano nowe urządzenie {device_id} do subskrybenta {sub.id}")
 
             db.session.commit()
             known_devices_cache.add(device_id)
