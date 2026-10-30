@@ -435,7 +435,9 @@ void app_main(void) {
             wifi_connect_stop();
         }
 
-        ESP_LOGI(TAG, "[SLEEP] Czekam 5 minut...");
+        // Najmniejszy wolny stos main od startu (bajty) - kontrola zapasu CONFIG_ESP_MAIN_TASK_STACK_SIZE
+        ESP_LOGI(TAG, "[SLEEP] Czekam %d s... (min. wolny stos main: %u B)",
+                 LOOP_DELAY_MS / 1000, (unsigned)uxTaskGetStackHighWaterMark(NULL));
         // Przerwa w kawalkach - watchdog pilnuje petli takze w czasie czekania
         for (int slept_ms = 0; slept_ms < LOOP_DELAY_MS; slept_ms += SLEEP_CHUNK_MS) {
             esp_task_wdt_reset();

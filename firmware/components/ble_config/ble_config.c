@@ -46,6 +46,7 @@ static gpio_num_t s_btn_gpio = GPIO_NUM_0;
 static bool s_ble_is_active = false;
 static bool s_ble_connected = false;
 static bool s_no_timeout = false;               // brak zapisanego Wi-Fi: BLE dziala az do skonfigurowania
+static volatile bool s_ble_timeout_expired = false; // ustawiane przez timer, BLE wylacza task przycisku
 static char s_device_name[8];                   // "SF-DF38" - koncowka MAC, rozne dla kazdej plytki
 static factory_reset_cb_t s_factory_reset_cb = NULL;
 
@@ -261,9 +262,10 @@ static void ble_config_stop_internal(void) {
     ESP_LOGI(TAG, "BLE wylaczone.");
 }
 
+// Dziala w tasku Timer Service (stos 2 KB, wspolny dla wszystkich timerow) - wylaczanie Bluetooth
+// jest tam za ciezkie, wiec tylko ustawiamy flage dla taska przycisku
 static void ble_timeout_callback(TimerHandle_t xTimer) {
-    ESP_LOGW(TAG, "Timeout 5 min - wylaczam BLE.");
-    ble_config_stop_internal();
+    s_ble_timeout_expired = true;
 }
 
 void ble_config_stop(void) {
@@ -290,6 +292,12 @@ static void button_task(void *pvParam) {
     bool reset_armed = false;     // 10 s: puszczenie przycisku = reset fabryczny
 
     while (1) {
+        if (s_ble_timeout_expired) {
+            s_ble_timeout_expired = false;
+            ESP_LOGW(TAG, "Timeout 5 min - wylaczam BLE.");
+            ble_config_stop_internal();
+        }
+
         if (gpio_get_level(s_btn_gpio) == 0) {
             hold_time += interval;
             if (hold_time % 1000 == 0) ESP_LOGD(TAG, "Trzymam: %d", hold_time);

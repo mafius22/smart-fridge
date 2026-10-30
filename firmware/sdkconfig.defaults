@@ -14,6 +14,9 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 
+# Stos taska main: pomiary, JSON, SNTP, bufor i wysylka paczek (domyslne 3584 B bez zapasu)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
 # SNTP wysyla zapytanie od razu po starcie (bez losowego opoznienia 0-5 s)
 # CONFIG_LWIP_SNTP_STARTUP_DELAY is not set
 
