@@ -13,7 +13,9 @@
 static const char *TAG = "OTA_MANAGER";
 static char ota_url_buffer[256];
 
-extern bool g_ota_trwa;
+// Ustawiane przez ota_task, czytane przez main (inny task)
+static volatile bool s_ota_running = false;
+static volatile bool s_restart_pending = false;
 
 // Ile czasu nowy firmware ma na pierwsze polaczenie z MQTT (3 cykle po 5 min)
 #define OTA_VERIFY_TIMEOUT_US (15LL * 60 * 1000 * 1000)
@@ -72,28 +74,44 @@ void ota_task(void *pvParameter) {
     };
 
     esp_err_t ret = esp_https_ota(&ota_config);
-    
+
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "OTA zakonczone sukcesem! Restart...");
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        esp_restart();
+        // Restart wykonuje main w bezpiecznym miejscu (nie w trakcie zapisu bufora do flasha)
+        ESP_LOGI(TAG, "OTA zakonczone sukcesem - restart po zakonczeniu cyklu.");
+        s_restart_pending = true;
     } else {
         ESP_LOGE(TAG, "Blad aktualizacji OTA: %s", esp_err_to_name(ret));
-        
-        g_ota_trwa = false; 
         ESP_LOGW(TAG, "Nieudane OTA - main moze wylaczyc Wi-Fi i kontynuowac pomiary.");
     }
-    
+    s_ota_running = false;
+
     vTaskDelete(NULL);
 }
 
-void ota_start(const char *url) {
+bool ota_start(const char *url) {
+    if (s_ota_running) {
+        ESP_LOGW(TAG, "OTA juz trwa - ignoruje kolejna komende.");
+        return false;
+    }
     if (strlen(url) >= sizeof(ota_url_buffer)) {
         ESP_LOGE(TAG, "URL za dlugi!");
-        g_ota_trwa = false; 
-        return;
+        return false;
     }
     strcpy(ota_url_buffer, url);
-    
-    xTaskCreate(&ota_task, "ota_task", 10240, NULL, 5, NULL);
+
+    s_ota_running = true;
+    if (xTaskCreate(&ota_task, "ota_task", 10240, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Nie udalo sie uruchomic taska OTA");
+        s_ota_running = false;
+        return false;
+    }
+    return true;
+}
+
+bool ota_is_running(void) {
+    return s_ota_running;
+}
+
+bool ota_restart_pending(void) {
+    return s_restart_pending;
 }

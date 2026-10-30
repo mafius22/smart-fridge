@@ -4,6 +4,8 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
+#include "esp_system.h"
 #include "driver/gpio.h"
 #include "esp_event.h"
 #include <sys/time.h>
@@ -28,8 +30,9 @@ static const char *TAG = "MAIN_SYSTEM";
 #define MAX_SENSORS  10  
 #define LOOP_DELAY_MS 300000 // 5 minut
 
-// Flaga globalna (musi być ustawiana przez mqtt_handler/ota_manager)
-bool g_ota_trwa = false;
+#define MAIN_WDT_TIMEOUT_MS  60000          // petla glowna bez esp_task_wdt_reset() dluzej = restart
+#define SLEEP_CHUNK_MS       10000          // przerwa miedzy cyklami w kawalkach (reset watchdoga)
+#define OTA_MAX_WAIT_MS      (5 * 60 * 1000) // dluzsze OTA = zawieszone, restart do obecnego firmware
 
 // --- CZAS (SNTP) ---
 #define SNTP_ATTEMPTS         3
@@ -156,6 +159,21 @@ SensorData get_ds18b20_reading(ds18b20_device_handle_t sensor_handle) {
     return d;
 }
 
+// Wysylka rekordu z bufora - reset watchdoga, bo zaleglosci moga liczyc setki rekordow
+static bool send_buffered_record(SensorData data) {
+    esp_task_wdt_reset();
+    return mqtt_send_sensor_data(data);
+}
+
+// Restart tylko z petli glownej, gdy nic nie jest zapisywane do flasha
+static void restart_safely(const char *reason) {
+    ESP_LOGW(TAG, "Restart: %s", reason);
+    vTaskDelay(pdMS_TO_TICKS(1000)); // czas na dostarczenie publikacji czyszczacej komende (QoS1)
+    mqtt_app_stop();
+    wifi_connect_stop();
+    esp_restart();
+}
+
 void app_main(void) {
     ESP_ERROR_CHECK(storage_init());
 
@@ -217,8 +235,19 @@ void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(1000));
     int cycle_counter = 0;
 
+    // Watchdog petli glownej: zawieszenie na dluzej niz 60 s = restart plytki
+    // (po OTA restart przed potwierdzeniem = powrot do poprzedniego firmware)
+    esp_task_wdt_config_t wdt_cfg = {
+        .timeout_ms = MAIN_WDT_TIMEOUT_MS,
+        .idle_core_mask = (1 << CONFIG_FREERTOS_NUMBER_OF_CORES) - 1,
+        .trigger_panic = true,
+    };
+    ESP_ERROR_CHECK(esp_task_wdt_reconfigure(&wdt_cfg));
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+
     // 3. Główna pętla nieskończona
     while (1) {
+        esp_task_wdt_reset();
         cycle_counter++;
         ESP_LOGI(TAG, "\n================ CYKL #%d ================", cycle_counter);
 
@@ -228,19 +257,22 @@ void app_main(void) {
 
         if (wifi_connect_start() == ESP_OK) {
             is_online = true;
-            
+            esp_task_wdt_reset();
+
             obtain_time();
+            esp_task_wdt_reset();
 
             ESP_LOGI(TAG, "[SYSTEM] ONLINE. Start MQTT...");
             if (mqtt_app_start()) {
                 mqtt_ready = true;
-                
+
                 // Jeśli mamy dane w buforze, wyślij je teraz
                 if (offline_buffer_count() > 0) {
                     ESP_LOGW(TAG, "Wysyłanie bufora offline...");
-                    offline_process_queue(mqtt_send_sensor_data);
+                    offline_process_queue(send_buffered_record);
                 }
             }
+            esp_task_wdt_reset();
         } else {
             ESP_LOGE(TAG, "Brak WiFi (Offline).");
         }
@@ -254,6 +286,7 @@ void app_main(void) {
         // Odczyt czujników
         if (ds18b20_device_num > 0) {
             for (int i = 0; i < ds18b20_device_num; i++) {
+                esp_task_wdt_reset();
                 ESP_LOGI(TAG, "--- Czujnik %d ---", i);
 
                 SensorData current_data = get_ds18b20_reading(ds18b20s[i]);
@@ -284,30 +317,38 @@ void app_main(void) {
             ESP_LOGE(TAG, "BRAK CZUJNIKÓW!");
         }
 
-        // --- KLUCZOWE: OCHRONA OTA ---
-        // Sprawdzamy, czy trwa OTA zanim odłączymy sieć
-        if (g_ota_trwa) {
-            ESP_LOGW(TAG, "*********** TRWA OTA - WSTRZYMUJE ROZLACZANIE ***********");
-            ESP_LOGW(TAG, "Nie wylaczam WiFi, czekam na zakonczenie aktualizacji...");
-            
-            // Pętla czekająca na zakończenie OTA
-            while (g_ota_trwa) {
-                // Tutaj system "wisi" i pozwala działać procesowi OTA w tle.
-                // Jeśli OTA się uda -> nastąpi restart systemu.
-                // Jeśli OTA się nie uda -> flaga g_ota_trwa zmieni się na false (w ota_manager).
+        // --- OTA: Wi-Fi zostaje wlaczone do konca pobierania ---
+        if (ota_is_running()) {
+            ESP_LOGW(TAG, "Trwa OTA - czekam z wylaczeniem Wi-Fi (max %d s)...", OTA_MAX_WAIT_MS / 1000);
+            for (int waited_ms = 0; ota_is_running() && waited_ms < OTA_MAX_WAIT_MS; waited_ms += 1000) {
+                esp_task_wdt_reset();
                 vTaskDelay(pdMS_TO_TICKS(1000));
             }
-            ESP_LOGW(TAG, "Flaga OTA zgasla (blad lub timeout). Kontynuuje petle.");
+            if (ota_is_running()) {
+                // Niedokonczone OTA nie zmienia slotu startowego - po restarcie dziala obecny firmware
+                restart_safely("OTA trwa ponad 5 min");
+            }
         }
 
-        // Rozłączamy tylko wtedy, gdy OTA NIE TRWA
-        if (is_online && !g_ota_trwa) {
+        // --- Restarty z komend: pomiary wyslane, bufor zamkniety - bezpieczny moment ---
+        if (ota_restart_pending()) {
+            restart_safely("nowy firmware po OTA");
+        }
+        if (mqtt_restart_requested()) {
+            restart_safely("komenda reset z MQTT");
+        }
+
+        if (is_online) {
             ESP_LOGI(TAG, "Zamykanie połączeń na czas przerwy...");
             mqtt_app_stop();
             wifi_connect_stop();
         }
 
         ESP_LOGI(TAG, "[SLEEP] Czekam 5 minut...");
-        vTaskDelay(pdMS_TO_TICKS(LOOP_DELAY_MS));
+        // Przerwa w kawalkach - watchdog pilnuje petli takze w czasie czekania
+        for (int slept_ms = 0; slept_ms < LOOP_DELAY_MS; slept_ms += SLEEP_CHUNK_MS) {
+            esp_task_wdt_reset();
+            vTaskDelay(pdMS_TO_TICKS(SLEEP_CHUNK_MS));
+        }
     }
 }

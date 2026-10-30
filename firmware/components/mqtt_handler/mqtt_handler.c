@@ -12,8 +12,8 @@
 
 static const char *TAG = "MQTT_HANDLER";
 
-// Flaga z main.c: gdy trwa OTA, main nie wylacza Wi-Fi po cyklu
-extern bool g_ota_trwa;
+// Komenda reset odebrana - restart wykonuje main po zakonczeniu cyklu
+static volatile bool s_restart_requested = false;
 
 // Deklaracja zapowiadająca (forward declaration)
 void mqtt_app_stop(void);
@@ -93,10 +93,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             if (topic_is(event, s_topic_reset)) {
                 // Pusta wiadomosc (czyszczenie retain) nie moze wywolac restartu
                 if (event->data_len == 1 && event->data[0] == '1') {
-                    ESP_LOGW(TAG, "!!! KOMENDA RESETU !!!");
+                    ESP_LOGW(TAG, "!!! KOMENDA RESETU !!! Restart po zakonczeniu cyklu.");
                     esp_mqtt_client_publish(client, s_topic_reset, "", 0, 1, 1); // Czyść temat
-                    vTaskDelay(pdMS_TO_TICKS(2000));
-                    esp_restart();
+                    s_restart_requested = true;
                 }
             }
             
@@ -123,15 +122,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                 
                 ESP_LOGW(TAG, "Otrzymano link OTA: %s", url);
 
-                // 3. BLOKADA WYLACZENIA WI-FI (main czeka na koniec OTA)
-                g_ota_trwa = true;
-                ESP_LOGW(TAG, "Ustawiono flage g_ota_trwa = true. Wi-Fi zostaje wlaczone do konca OTA.");
-                
-                // 4. CZYŚCIMY TEMAT (Retain)
+                // 3. CZYŚCIMY TEMAT (Retain)
                 // To wyśle pustą wiadomość, która wróci do nas, ale "if" na górze ją zablokuje
                 esp_mqtt_client_publish(client, s_topic_update, "", 0, 1, 1);
-                
-                // 5. START OTA
+
+                // 4. START OTA (main nie wylaczy Wi-Fi, dopoki ota_is_running())
                 ota_start(url);
             }
             break;
@@ -227,4 +222,8 @@ bool mqtt_send_sensor_data(SensorData data) {
         ESP_LOGE(TAG, "Timeout potwierdzenia wysylki");
         return false;
     }
+}
+
+bool mqtt_restart_requested(void) {
+    return s_restart_requested;
 }

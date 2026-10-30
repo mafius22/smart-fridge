@@ -13,4 +13,7 @@ void mqtt_app_stop(void);
 // Funkcja do wysyłania pojedynczego pomiaru
 bool mqtt_send_sensor_data(SensorData data);
 
+// true po odebraniu komendy reset - restart wykonuje main
+bool mqtt_restart_requested(void);
+
 #endif // MQTT_HANDLER_H
