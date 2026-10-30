@@ -10,8 +10,9 @@ bool mqtt_app_start(void);
 // Rozłączenie i zwolnienie zasobów
 void mqtt_app_stop(void);
 
-// Funkcja do wysyłania pojedynczego pomiaru
-bool mqtt_send_sensor_data(SensorData data);
+// Wysyla paczke pomiarow jedna wiadomoscia {"readings":[...]} i czeka na potwierdzenie (QoS1).
+// Maks. OFFLINE_BATCH_MAX rekordow. true = broker potwierdzil odbior
+bool mqtt_send_readings(const SensorData *items, size_t count);
 
 // true po odebraniu komendy reset - restart wykonuje main
 bool mqtt_restart_requested(void);

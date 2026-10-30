@@ -4,6 +4,7 @@
 #include "esp_err.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 // Struktura pojedynczego pomiaru
 typedef struct {
@@ -18,21 +19,23 @@ typedef struct {
 // Zamienia adres ROM na tekst, np. "28ff4a1b0c160354"
 void sensor_rom_to_str(uint64_t rom, char *out);
 
-// Montuje system plików
+// Maksymalna liczba rekordow w jednej paczce wysylanej z bufora
+#define OFFLINE_BATCH_MAX 50
+
+// Montuje system plikow, naprawia urwany zapis, przenosi bufor ze starszych wersji
 esp_err_t offline_buffer_init(void);
 
-// Dopisz pomiar na koniec pliku
+// Dopisz pomiar do bufora (przy braku miejsca usuwa najstarsze ~10% danych)
 esp_err_t offline_buffer_add(SensorData data);
 
-// Sprawdź ile mamy pomiarów w buforze
+// Liczba pomiarow czekajacych na wyslanie
 size_t offline_buffer_count(void);
 
-// Typ funkcji callback - użyjemy jej do wysyłania danych
-// Zwraca true jeśli wysyłka się udała, false jeśli błąd
-typedef bool (*send_data_callback_t)(SensorData data);
+// Wysyla paczke rekordow. true = broker potwierdzil odbior
+typedef bool (*send_batch_callback_t)(const SensorData *items, size_t count);
 
-// Przetwórz bufor: Czyta dane, wywołuje callback, 
-// i jeśli sukces - usuwa dane z pliku.
-void offline_process_queue(send_data_callback_t send_func);
+// Wysyla zaleglosci od najstarszych, paczkami po OFFLINE_BATCH_MAX, maks. max_records w jednym wywolaniu.
+// Przy bledzie wysylki przerywa - reszta czeka na kolejny cykl.
+void offline_process_queue(send_batch_callback_t send_func, size_t max_records);
 
 #endif // OFFLINE_BUFFER_H

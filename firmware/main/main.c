@@ -28,11 +28,15 @@ static const char *TAG = "MAIN_SYSTEM";
 // Konfiguracja
 #define SENSOR_GPIO  GPIO_NUM_4
 #define MAX_SENSORS  10  
-#define LOOP_DELAY_MS 300000 // 5 minut
+#define LOOP_DELAY_MS 15000 // 5 minut
 
 #define MAIN_WDT_TIMEOUT_MS  60000          // petla glowna bez esp_task_wdt_reset() dluzej = restart
 #define SLEEP_CHUNK_MS       10000          // przerwa miedzy cyklami w kawalkach (reset watchdoga)
 #define OTA_MAX_WAIT_MS      (5 * 60 * 1000) // dluzsze OTA = zawieszone, restart do obecnego firmware
+#define BACKLOG_PER_CYCLE    500             // zaleglosci z bufora na cykl (10 paczek) - reszta w kolejnych cyklach
+
+// Biezace pomiary ida jedna paczka - musza sie zmiescic w limicie paczki
+_Static_assert(MAX_SENSORS <= OFFLINE_BATCH_MAX, "MAX_SENSORS > OFFLINE_BATCH_MAX");
 
 // --- CZAS (SNTP) ---
 #define SNTP_ATTEMPTS         3
@@ -159,10 +163,10 @@ SensorData get_ds18b20_reading(ds18b20_device_handle_t sensor_handle) {
     return d;
 }
 
-// Wysylka rekordu z bufora - reset watchdoga, bo zaleglosci moga liczyc setki rekordow
-static bool send_buffered_record(SensorData data) {
+// Wysylka paczki z bufora - reset watchdoga przed kazda paczka
+static bool send_buffered_batch(const SensorData *items, size_t count) {
     esp_task_wdt_reset();
-    return mqtt_send_sensor_data(data);
+    return mqtt_send_readings(items, count);
 }
 
 // Restart tylko z petli glownej, gdy nic nie jest zapisywane do flasha
@@ -263,15 +267,7 @@ void app_main(void) {
             esp_task_wdt_reset();
 
             ESP_LOGI(TAG, "[SYSTEM] ONLINE. Start MQTT...");
-            if (mqtt_app_start()) {
-                mqtt_ready = true;
-
-                // Jeśli mamy dane w buforze, wyślij je teraz
-                if (offline_buffer_count() > 0) {
-                    ESP_LOGW(TAG, "Wysyłanie bufora offline...");
-                    offline_process_queue(send_buffered_record);
-                }
-            }
+            mqtt_ready = mqtt_app_start();
             esp_task_wdt_reset();
         } else {
             ESP_LOGE(TAG, "Brak WiFi (Offline).");
@@ -283,38 +279,48 @@ void app_main(void) {
              ESP_LOGW(TAG, "⚠️ CZAS NIEPRAWIDŁOWY (1970). Dane nie będą buforowane!");
         }
 
-        // Odczyt czujników
-        if (ds18b20_device_num > 0) {
-            for (int i = 0; i < ds18b20_device_num; i++) {
-                esp_task_wdt_reset();
-                ESP_LOGI(TAG, "--- Czujnik %d ---", i);
+        // 1. Pomiar wszystkich czujnikow (kazdy z wlasnym znacznikiem czasu)
+        static SensorData readings[MAX_SENSORS];
+        int reading_count = 0;
+        for (int i = 0; i < ds18b20_device_num; i++) {
+            esp_task_wdt_reset();
+            ESP_LOGI(TAG, "--- Czujnik %d ---", i);
 
-                SensorData current_data = get_ds18b20_reading(ds18b20s[i]);
+            readings[reading_count] = get_ds18b20_reading(ds18b20s[i]);
 
-                char rom_str[SENSOR_ROM_STR_LEN];
-                sensor_rom_to_str(current_data.sensor_rom, rom_str);
-                ESP_LOGI(TAG, "Odczyt [%s]: %.2f st. C", rom_str, current_data.temp);
+            char rom_str[SENSOR_ROM_STR_LEN];
+            sensor_rom_to_str(readings[reading_count].sensor_rom, rom_str);
+            ESP_LOGI(TAG, "Odczyt [%s]: %.2f st. C", rom_str, readings[reading_count].temp);
+            reading_count++;
+        }
+        if (ds18b20_device_num == 0) {
+            ESP_LOGE(TAG, "BRAK CZUJNIKÓW!");
+        }
 
-                if (mqtt_ready) {
-                    if (!mqtt_send_sensor_data(current_data)) {
-                        ESP_LOGE(TAG, "Błąd MQTT. Próba buforowania...");
-                        if (time_is_valid) offline_buffer_add(current_data);
-                    } else {
-                        ESP_LOGI(TAG, "Wysłano OK.");
+        // 2. Biezace pomiary jedna wiadomoscia - najpierw one, potem zaleglosci
+        bool live_sent = false;
+        if (reading_count > 0) {
+            if (mqtt_ready) {
+                live_sent = mqtt_send_readings(readings, reading_count);
+                if (!live_sent) ESP_LOGE(TAG, "Błąd MQTT. Próba buforowania...");
+            }
+            if (!live_sent) {
+                if (time_is_valid) {
+                    ESP_LOGI(TAG, "Zapis %d pomiarow do bufora.", reading_count);
+                    for (int i = 0; i < reading_count; i++) {
+                        offline_buffer_add(readings[i]);
                     }
                 } else {
-                    if (time_is_valid) {
-                        ESP_LOGI(TAG, "Offline -> Zapis do bufora.");
-                        offline_buffer_add(current_data);
-                    } else {
-                        ESP_LOGW(TAG, "Offline + Zły czas -> Dane odrzucone.");
-                    }
+                    ESP_LOGW(TAG, "Offline + Zły czas -> Dane odrzucone.");
                 }
-
-                vTaskDelay(pdMS_TO_TICKS(100)); 
             }
-        } else {
-            ESP_LOGE(TAG, "BRAK CZUJNIKÓW!");
+        }
+        esp_task_wdt_reset();
+
+        // 3. Zaleglosci z bufora paczkami (pomijamy, gdy wysylka biezacych sie nie udala - polaczenie nie dziala)
+        if (mqtt_ready && (reading_count == 0 || live_sent) && offline_buffer_count() > 0) {
+            ESP_LOGW(TAG, "Wysyłanie bufora offline (%u pomiarow)...", (unsigned)offline_buffer_count());
+            offline_process_queue(send_buffered_batch, BACKLOG_PER_CYCLE);
         }
 
         // --- OTA: Wi-Fi zostaje wlaczone do konca pobierania ---
@@ -348,7 +354,8 @@ void app_main(void) {
         // Przerwa w kawalkach - watchdog pilnuje petli takze w czasie czekania
         for (int slept_ms = 0; slept_ms < LOOP_DELAY_MS; slept_ms += SLEEP_CHUNK_MS) {
             esp_task_wdt_reset();
-            vTaskDelay(pdMS_TO_TICKS(SLEEP_CHUNK_MS));
+            int chunk_ms = LOOP_DELAY_MS - slept_ms;
+            vTaskDelay(pdMS_TO_TICKS(chunk_ms < SLEEP_CHUNK_MS ? chunk_ms : SLEEP_CHUNK_MS));
         }
     }
 }

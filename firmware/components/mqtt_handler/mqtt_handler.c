@@ -59,6 +59,14 @@ static EventGroupHandle_t s_mqtt_event_group;
 
 static esp_mqtt_client_handle_t client = NULL;
 
+// msg_id ostatniej potwierdzonej (PUBACK) wiadomosci - spozniony PUBACK poprzedniej nie zatwierdzi nowej paczki
+static volatile int s_acked_msg_id = -1;
+
+// Paczka pomiarow w JSON: ~60 B na rekord x OFFLINE_BATCH_MAX (50) + naglowek
+#define PAYLOAD_MAX       4096
+#define PUBACK_TIMEOUT_MS 10000
+static char s_payload[PAYLOAD_MAX];
+
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_mqtt_event_handle_t event = event_data;
     esp_mqtt_client_handle_t client = event->client;
@@ -83,6 +91,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
         case MQTT_EVENT_PUBLISHED:
             ESP_LOGD(TAG, "Wiadomosc ID=%d opublikowana", event->msg_id);
+            s_acked_msg_id = event->msg_id;
             xEventGroupSetBits(s_mqtt_event_group, MQTT_PUBLISHED_BIT);
             break;
 
@@ -161,6 +170,7 @@ bool mqtt_app_start(void) {
         .broker.verification.crt_bundle_attach = esp_crt_bundle_attach, // Certyfikaty Vercel/SSL
         .session.keepalive = 60,
         .network.timeout_ms = 15000,
+        .buffer.out_size = PAYLOAD_MAX, // paczka pomiarow w jednym kawalku (domyslnie 1024 B)
     };
 
     client = esp_mqtt_client_init(&mqtt_cfg);
@@ -190,38 +200,51 @@ void mqtt_app_stop(void) {
     }
 }
 
-bool mqtt_send_sensor_data(SensorData data) {
-    if (client == NULL) return false;
+// Buduje {"readings":[{"sid":...,"ts":...,"temp":...},...]} - czujnik po ROM, plytka po temacie
+static bool build_readings_payload(const SensorData *items, size_t count) {
+    size_t len = snprintf(s_payload, PAYLOAD_MAX, "{\"readings\":[");
+    for (size_t i = 0; i < count; i++) {
+        char rom_str[SENSOR_ROM_STR_LEN];
+        sensor_rom_to_str(items[i].sensor_rom, rom_str);
+        len += snprintf(s_payload + len, PAYLOAD_MAX - len, "%s{\"sid\":\"%s\",\"ts\":%lld,\"temp\":%.2f}",
+                        (i > 0) ? "," : "", rom_str, items[i].timestamp, items[i].temp);
+        if (len >= PAYLOAD_MAX) {
+            return false;
+        }
+    }
+    len += snprintf(s_payload + len, PAYLOAD_MAX - len, "]}");
+    return len < PAYLOAD_MAX;
+}
 
-    char rom_str[SENSOR_ROM_STR_LEN];
-    sensor_rom_to_str(data.sensor_rom, rom_str);
+bool mqtt_send_readings(const SensorData *items, size_t count) {
+    if (client == NULL || count == 0) return false;
 
-    char payload[128];
-    // JSON Payload: czujnik rozpoznawany po ROM, plytka po temacie
-    snprintf(payload, sizeof(payload),
-             "{\"sid\":\"%s\",\"ts\":%lld,\"temp\":%.2f}",
-             rom_str, data.timestamp, data.temp);
+    if (!build_readings_payload(items, count)) {
+        ESP_LOGE(TAG, "Paczka %u pomiarow nie miesci sie w %d B", (unsigned)count, PAYLOAD_MAX);
+        return false;
+    }
 
     xEventGroupClearBits(s_mqtt_event_group, MQTT_PUBLISHED_BIT);
 
-    int msg_id = esp_mqtt_client_publish(client, s_topic_data, payload, 0, 1, 0);
-    
+    int msg_id = esp_mqtt_client_publish(client, s_topic_data, s_payload, 0, 1, 0);
     if (msg_id == -1) {
         ESP_LOGE(TAG, "Blad kolejkowania wiadomosci");
         return false;
     }
 
-    EventBits_t bits = xEventGroupWaitBits(s_mqtt_event_group, 
-        MQTT_PUBLISHED_BIT, 
-        pdTRUE, pdFALSE, pdMS_TO_TICKS(5000));
-
-    if (bits & MQTT_PUBLISHED_BIT) {
-        ESP_LOGI(TAG, "Wyslano na [%s]: %s", s_topic_data, payload);
-        return true;
-    } else {
-        ESP_LOGE(TAG, "Timeout potwierdzenia wysylki");
-        return false;
+    // Czekamy na PUBACK wlasnie tej wiadomosci
+    const TickType_t timeout = pdMS_TO_TICKS(PUBACK_TIMEOUT_MS);
+    const TickType_t start = xTaskGetTickCount();
+    TickType_t elapsed;
+    while ((elapsed = xTaskGetTickCount() - start) < timeout) {
+        xEventGroupWaitBits(s_mqtt_event_group, MQTT_PUBLISHED_BIT, pdTRUE, pdFALSE, timeout - elapsed);
+        if (s_acked_msg_id == msg_id) {
+            ESP_LOGI(TAG, "Wyslano %u pomiarow na [%s]", (unsigned)count, s_topic_data);
+            return true;
+        }
     }
+    ESP_LOGE(TAG, "Timeout potwierdzenia wysylki (%u pomiarow)", (unsigned)count);
+    return false;
 }
 
 bool mqtt_restart_requested(void) {
