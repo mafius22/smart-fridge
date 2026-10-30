@@ -12,7 +12,7 @@
 
 static const char *TAG = "MQTT_HANDLER";
 
-// Zmienna globalna do blokowania Deep Sleep w main.c
+// Flaga z main.c: gdy trwa OTA, main nie wylacza Wi-Fi po cyklu
 extern bool g_ota_trwa;
 
 // Deklaracja zapowiadająca (forward declaration)
@@ -123,9 +123,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                 
                 ESP_LOGW(TAG, "Otrzymano link OTA: %s", url);
 
-                // 3. BLOKADA DEEP SLEEP
-                g_ota_trwa = true; 
-                ESP_LOGW(TAG, "Ustawiono flage g_ota_trwa = true. Blokuje usypianie.");
+                // 3. BLOKADA WYLACZENIA WI-FI (main czeka na koniec OTA)
+                g_ota_trwa = true;
+                ESP_LOGW(TAG, "Ustawiono flage g_ota_trwa = true. Wi-Fi zostaje wlaczone do konca OTA.");
                 
                 // 4. CZYŚCIMY TEMAT (Retain)
                 // To wyśle pustą wiadomość, która wróci do nas, ale "if" na górze ją zablokuje

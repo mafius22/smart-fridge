@@ -7,20 +7,11 @@
 #include "freertos/event_groups.h"
 #include <string.h>
 
-#include "lwip/err.h"
-#include "lwip/sockets.h"
-#include "lwip/sys.h"
-#include "lwip/netdb.h"
-#include "lwip/dns.h"
-
 static const char *TAG = "WIFI_CONN";
 
 #define DEFAULT_SSID      "TwojaSiec"
 #define DEFAULT_PASS      "TwojeHaslo"
 #define MAX_RETRY         3
-
-#define INTERNET_TEST_IP  "8.8.8.8"
-#define INTERNET_TEST_PORT 53
 
 static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
@@ -29,43 +20,6 @@ static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
 static bool s_is_connected = false;
 static bool s_allow_reconnect = true; 
-
-static bool check_internet_connection(void) {
-    ESP_LOGI(TAG, "Weryfikacja dostepu do Internetu (Ping 8.8.8.8)...");
-
-    struct sockaddr_in dest_addr;
-    inet_pton(AF_INET, INTERNET_TEST_IP, &dest_addr.sin_addr);
-    dest_addr.sin_family = AF_INET;
-    dest_addr.sin_port = htons(INTERNET_TEST_PORT);
-    int addr_family = AF_INET;
-    int ip_protocol = IPPROTO_IP;
-
-    int sock = socket(addr_family, SOCK_STREAM, ip_protocol);
-    if (sock < 0) {
-        ESP_LOGE(TAG, "Nie udalo sie utworzyc gniazda testowego: errno %d", errno);
-        return false;
-    }
-
-    struct timeval timeout;
-    timeout.tv_sec = 3;
-    timeout.tv_usec = 0;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
-    int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-    bool is_ok = false;
-
-    if (err != 0) {
-        ESP_LOGW(TAG, "Brak Internetu! Polaczenie z 8.8.8.8 nieudane (errno %d)", errno);
-        is_ok = false;
-    } else {
-        ESP_LOGI(TAG, "Internet DOSTEPNY (Polaczono z 8.8.8.8).");
-        is_ok = true;
-    }
-
-    close(sock);
-    return is_ok;
-}
 
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data) {
@@ -141,16 +95,9 @@ esp_err_t wifi_connect_start(void) {
             pdFALSE, pdFALSE, pdMS_TO_TICKS(10000));
 
     if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "Polaczono z lokalnym routerem. Weryfikuje WAN...");
-        
-        if (check_internet_connection()) {
-            return ESP_OK; 
-        } else {
-            ESP_LOGW(TAG, "Jest WiFi, ale brak internetu. Rozlaczam.");
-            wifi_connect_stop(); 
-            return ESP_FAIL; 
-        }
-
+        // Dostep do internetu sprawdza polaczenie z brokerem MQTT (brak = pomiary do bufora)
+        ESP_LOGI(TAG, "Polaczono z routerem.");
+        return ESP_OK;
     } else {
         if (bits & WIFI_FAIL_BIT) {
              ESP_LOGE(TAG, "Nie udalo sie polaczyc (bledne haslo/brak zasiegu).");

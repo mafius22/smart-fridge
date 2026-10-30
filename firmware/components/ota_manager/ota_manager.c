@@ -81,7 +81,7 @@ void ota_task(void *pvParameter) {
         ESP_LOGE(TAG, "Blad aktualizacji OTA: %s", esp_err_to_name(ret));
         
         g_ota_trwa = false; 
-        ESP_LOGW(TAG, "Zwolniono blokade Deep Sleep po nieudanym OTA.");
+        ESP_LOGW(TAG, "Nieudane OTA - main moze wylaczyc Wi-Fi i kontynuowac pomiary.");
     }
     
     vTaskDelete(NULL);

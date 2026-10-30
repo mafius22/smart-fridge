@@ -1,4 +1,5 @@
 # Ustawienia projektu potrzebne do zbudowania firmware (sdkconfig nie jest w repo - zawiera hasla).
+
 # Dane brokera MQTT ustaw po sklonowaniu w: idf.py menuconfig -> "Konfiguracja MQTT (HiveMQ)".
 
 # Flash 4 MB + wlasna tablica partycji (2 sloty OTA, nvs_keys, bufor offline)
@@ -12,6 +13,9 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # Mniejszy obraz (szybsze OTA, zapas w slocie)
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+
+# SNTP wysyla zapytanie od razu po starcie (bez losowego opoznienia 0-5 s)
+# CONFIG_LWIP_SNTP_STARTUP_DELAY is not set
 
 # BLE do konfiguracji Wi-Fi
 CONFIG_BT_ENABLED=y
