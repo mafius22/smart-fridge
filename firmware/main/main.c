@@ -6,6 +6,8 @@
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
 #include "esp_system.h"
+#include "esp_app_desc.h"
+#include "esp_wifi.h"
 #include "driver/gpio.h"
 #include "esp_event.h"
 #include <sys/time.h>
@@ -28,12 +30,14 @@ static const char *TAG = "MAIN_SYSTEM";
 // Konfiguracja
 #define SENSOR_GPIO  GPIO_NUM_4
 #define MAX_SENSORS  10  
-#define LOOP_DELAY_MS 15000 // 5 minut
+#define LOOP_DELAY_MS 300000 // 5 minut
 
 #define MAIN_WDT_TIMEOUT_MS  60000          // petla glowna bez esp_task_wdt_reset() dluzej = restart
 #define SLEEP_CHUNK_MS       10000          // przerwa miedzy cyklami w kawalkach (reset watchdoga)
 #define OTA_MAX_WAIT_MS      (5 * 60 * 1000) // dluzsze OTA = zawieszone, restart do obecnego firmware
 #define BACKLOG_PER_CYCLE    500             // zaleglosci z bufora na cykl (10 paczek) - reszta w kolejnych cyklach
+#define STATUS_MAX           512             // JSON statusu: ~140 B + 19 B na czujnik
+#define STATUS_INTERVAL_MS   (60 * 60 * 1000) // status co godzine; po starcie i zmianie wyniku OTA - od razu
 
 // Biezace pomiary ida jedna paczka - musza sie zmiescic w limicie paczki
 _Static_assert(MAX_SENSORS <= OFFLINE_BATCH_MAX, "MAX_SENSORS > OFFLINE_BATCH_MAX");
@@ -169,6 +173,51 @@ static bool send_buffered_batch(const SensorData *items, size_t count) {
     return mqtt_send_readings(items, count);
 }
 
+// Kiedy wyslano ostatni status - lista czujnikow zmienia sie tylko przy starcie, wiec sledzimy tylko wynik OTA
+static int64_t s_last_status_us = 0;       // 0 = status jeszcze nie wyslany od startu
+static ota_result_t s_last_status_ota = OTA_RESULT_NONE;
+
+// Status: pierwszy po starcie, przy zmianie wyniku OTA, poza tym co STATUS_INTERVAL_MS
+static bool status_due(void) {
+    if (s_last_status_us == 0 || ota_last_result() != s_last_status_ota) {
+        return true;
+    }
+    return esp_timer_get_time() - s_last_status_us >= (int64_t)STATUS_INTERVAL_MS * 1000;
+}
+
+// Stan plytki dla backendu: wersja, wykryte czujniki, wynik OTA, sila Wi-Fi, zaleglosci.
+// Plytka offline = brak jakiejkolwiek wiadomosci (pomiary co interval_s, status co status_interval_s).
+static void publish_status(const uint64_t *sensor_roms, int sensor_count) {
+    static char json[STATUS_MAX];
+    wifi_ap_record_t ap;
+    int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
+    ota_result_t ota = ota_last_result();
+
+    int len = snprintf(json, sizeof(json),
+                       "{\"fw\":\"%s\",\"ts\":%lld,\"interval_s\":%d,\"status_interval_s\":%d,\"sensors\":[",
+                       esp_app_get_description()->version, (long long)time(NULL),
+                       LOOP_DELAY_MS / 1000, STATUS_INTERVAL_MS / 1000);
+    for (int i = 0; i < sensor_count && len < (int)sizeof(json); i++) {
+        char rom_str[SENSOR_ROM_STR_LEN];
+        sensor_rom_to_str(sensor_roms[i], rom_str);
+        len += snprintf(json + len, sizeof(json) - len, "%s\"%s\"", (i > 0) ? "," : "", rom_str);
+    }
+    if (len < (int)sizeof(json)) {
+        len += snprintf(json + len, sizeof(json) - len, "],\"ota\":\"%s\",\"rssi\":%d,\"buffered\":%u}",
+                        ota_result_str(ota), rssi, (unsigned)offline_buffer_count());
+    }
+    if (len >= (int)sizeof(json)) {
+        ESP_LOGE(TAG, "Status nie miesci sie w %d B", STATUS_MAX);
+        return;
+    }
+    if (!mqtt_publish_status(json)) {
+        ESP_LOGW(TAG, "Nie udalo sie wyslac statusu - ponowie w nastepnym cyklu");
+        return;
+    }
+    s_last_status_us = esp_timer_get_time();
+    s_last_status_ota = ota;
+}
+
 // Restart tylko z petli glownej, gdy nic nie jest zapisywane do flasha
 static void restart_safely(const char *reason) {
     ESP_LOGW(TAG, "Restart: %s", reason);
@@ -197,6 +246,8 @@ void app_main(void) {
     onewire_bus_handle_t bus = NULL;
     onewire_bus_config_t bus_config = {
         .bus_gpio_num = SENSOR_GPIO,
+        // Odlaczony przewod DATA nie "wisi w powietrzu" (zewnetrzny 4,7k jest po stronie sond)
+        .flags.en_pull_up = true,
     };
     onewire_bus_rmt_config_t rmt_config = {
         .max_rx_bytes = 10, 
@@ -210,7 +261,8 @@ void app_main(void) {
 
     int ds18b20_device_num = 0;
     ds18b20_device_handle_t ds18b20s[MAX_SENSORS];
-    
+    uint64_t sensor_roms[MAX_SENSORS]; // lista wykrytych czujnikow do statusu
+
     if (bus) {
         onewire_device_iter_handle_t iter = NULL;
         onewire_device_t next_onewire_device;
@@ -227,10 +279,14 @@ void app_main(void) {
                     char rom_str[SENSOR_ROM_STR_LEN];
                     sensor_rom_to_str(next_onewire_device.address, rom_str);
                     ESP_LOGI(TAG, "Znaleziono DS18B20 -> ROM: %s", rom_str);
+                    sensor_roms[ds18b20_device_num] = next_onewire_device.address;
                     ds18b20_device_num++;
                 }
+            } else if (search_result != ESP_ERR_NOT_FOUND) {
+                // Blad magistrali (odpiety przewod, zwarcie) - ponawianie w petli zablokowaloby start plytki
+                ESP_LOGE(TAG, "Błąd magistrali 1-Wire podczas szukania (%s) - przerywam", esp_err_to_name(search_result));
             }
-        } while (search_result != ESP_ERR_NOT_FOUND && ds18b20_device_num < MAX_SENSORS);
+        } while (search_result == ESP_OK && ds18b20_device_num < MAX_SENSORS);
         
         onewire_del_device_iter(iter);
         ESP_LOGI(TAG, "Znaleziono łącznie: %d czujników.", ds18b20_device_num);
@@ -332,8 +388,15 @@ void app_main(void) {
             }
             if (ota_is_running()) {
                 // Niedokonczone OTA nie zmienia slotu startowego - po restarcie dziala obecny firmware
+                ota_report_timeout();
                 restart_safely("OTA trwa ponad 5 min");
             }
+        }
+
+        // --- Status plytki (takze bez czujnikow - sygnal zycia): po starcie, przy zmianie OTA, co godzine ---
+        if (mqtt_ready && (reading_count == 0 || live_sent) && status_due()) {
+            esp_task_wdt_reset();
+            publish_status(sensor_roms, ds18b20_device_num);
         }
 
         // --- Restarty z komend: pomiary wyslane, bufor zamkniety - bezpieczny moment ---

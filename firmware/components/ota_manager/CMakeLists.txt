@@ -1,5 +1,5 @@
 idf_component_register(
     SRCS "ota_manager.c"
     INCLUDE_DIRS "."
-    REQUIRES esp_https_ota esp_http_client log mbedtls app_update esp_timer
+    REQUIRES esp_https_ota esp_http_client log mbedtls app_update esp_timer storage_manager
 )

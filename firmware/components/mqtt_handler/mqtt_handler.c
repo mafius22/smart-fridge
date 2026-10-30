@@ -30,6 +30,7 @@ static char s_device_id[16];
 static char s_topic_data[64];   // sf/v1/{id}/data   - pomiary
 static char s_topic_reset[64];  // sf/v1/{id}/reset  - "1" = restart
 static char s_topic_update[64]; // sf/v1/{id}/update - link do OTA
+static char s_topic_status[64]; // sf/v1/{id}/status - stan plytki (retained)
 
 static void init_device_topics(void) {
     if (s_device_id[0] != '\0') return; // juz policzone
@@ -42,6 +43,7 @@ static void init_device_topics(void) {
     snprintf(s_topic_data, sizeof(s_topic_data), MQTT_TOPIC_PREFIX "/%s/data", s_device_id);
     snprintf(s_topic_reset, sizeof(s_topic_reset), MQTT_TOPIC_PREFIX "/%s/reset", s_device_id);
     snprintf(s_topic_update, sizeof(s_topic_update), MQTT_TOPIC_PREFIX "/%s/update", s_device_id);
+    snprintf(s_topic_status, sizeof(s_topic_status), MQTT_TOPIC_PREFIX "/%s/status", s_device_id);
 
     ESP_LOGI(TAG, "ID plytki: %s", s_device_id);
 }
@@ -216,35 +218,52 @@ static bool build_readings_payload(const SensorData *items, size_t count) {
     return len < PAYLOAD_MAX;
 }
 
-bool mqtt_send_readings(const SensorData *items, size_t count) {
-    if (client == NULL || count == 0) return false;
-
-    if (!build_readings_payload(items, count)) {
-        ESP_LOGE(TAG, "Paczka %u pomiarow nie miesci sie w %d B", (unsigned)count, PAYLOAD_MAX);
-        return false;
-    }
+// Publikacja QoS1 i czekanie na PUBACK wlasnie tej wiadomosci. true = broker potwierdzil odbior
+static bool publish_and_wait(const char *topic, const char *payload, bool retain) {
+    if (client == NULL) return false;
 
     xEventGroupClearBits(s_mqtt_event_group, MQTT_PUBLISHED_BIT);
 
-    int msg_id = esp_mqtt_client_publish(client, s_topic_data, s_payload, 0, 1, 0);
+    int msg_id = esp_mqtt_client_publish(client, topic, payload, 0, 1, retain ? 1 : 0);
     if (msg_id == -1) {
-        ESP_LOGE(TAG, "Blad kolejkowania wiadomosci");
+        ESP_LOGE(TAG, "Blad kolejkowania wiadomosci na [%s]", topic);
         return false;
     }
 
-    // Czekamy na PUBACK wlasnie tej wiadomosci
     const TickType_t timeout = pdMS_TO_TICKS(PUBACK_TIMEOUT_MS);
     const TickType_t start = xTaskGetTickCount();
     TickType_t elapsed;
     while ((elapsed = xTaskGetTickCount() - start) < timeout) {
         xEventGroupWaitBits(s_mqtt_event_group, MQTT_PUBLISHED_BIT, pdTRUE, pdFALSE, timeout - elapsed);
         if (s_acked_msg_id == msg_id) {
-            ESP_LOGI(TAG, "Wyslano %u pomiarow na [%s]", (unsigned)count, s_topic_data);
             return true;
         }
     }
-    ESP_LOGE(TAG, "Timeout potwierdzenia wysylki (%u pomiarow)", (unsigned)count);
+    ESP_LOGE(TAG, "Timeout potwierdzenia wysylki na [%s]", topic);
     return false;
+}
+
+bool mqtt_send_readings(const SensorData *items, size_t count) {
+    if (count == 0) return false;
+
+    if (!build_readings_payload(items, count)) {
+        ESP_LOGE(TAG, "Paczka %u pomiarow nie miesci sie w %d B", (unsigned)count, PAYLOAD_MAX);
+        return false;
+    }
+    if (!publish_and_wait(s_topic_data, s_payload, false)) {
+        return false;
+    }
+    ESP_LOGI(TAG, "Wyslano %u pomiarow na [%s]", (unsigned)count, s_topic_data);
+    return true;
+}
+
+bool mqtt_publish_status(const char *json) {
+    // Retained: backend po restarcie od razu dostaje ostatni status kazdej plytki
+    if (!publish_and_wait(s_topic_status, json, true)) {
+        return false;
+    }
+    ESP_LOGI(TAG, "Status na [%s]: %s", s_topic_status, json);
+    return true;
 }
 
 bool mqtt_restart_requested(void) {

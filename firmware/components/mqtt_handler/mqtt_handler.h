@@ -14,6 +14,9 @@ void mqtt_app_stop(void);
 // Maks. OFFLINE_BATCH_MAX rekordow. true = broker potwierdzil odbior
 bool mqtt_send_readings(const SensorData *items, size_t count);
 
+// Publikuje stan plytki (JSON) na sf/v1/{id}/status jako retained, czeka na potwierdzenie
+bool mqtt_publish_status(const char *json);
+
 // true po odebraniu komendy reset - restart wykonuje main
 bool mqtt_restart_requested(void);
 

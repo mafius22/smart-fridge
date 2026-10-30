@@ -1,4 +1,5 @@
 #include "ota_manager.h"
+#include "storage_manager.h"
 #include "esp_log.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
@@ -20,6 +21,16 @@ static volatile bool s_restart_pending = false;
 // Ile czasu nowy firmware ma na pierwsze polaczenie z MQTT (3 cykle po 5 min)
 #define OTA_VERIFY_TIMEOUT_US (15LL * 60 * 1000 * 1000)
 
+// Wynik ostatniego OTA - w NVS, zeby przetrwal restart (widoczny w statusie MQTT do nastepnego OTA)
+#define NVS_NAMESPACE   "ota"
+#define NVS_KEY_RESULT  "result"
+static volatile ota_result_t s_last_result = OTA_RESULT_NONE;
+
+static void set_result(ota_result_t result) {
+    s_last_result = result;
+    storage_save_i32(NVS_NAMESPACE, NVS_KEY_RESULT, (int32_t)result);
+}
+
 static bool is_running_app_pending_verify(void) {
     esp_ota_img_states_t state;
     const esp_partition_t *running = esp_ota_get_running_partition();
@@ -34,7 +45,19 @@ static void verify_timeout_cb(void *arg) {
 }
 
 void ota_rollback_guard_start(void) {
-    if (!is_running_app_pending_verify()) return; // zwykly start, nie pierwszy po OTA
+    int32_t stored = OTA_RESULT_NONE;
+    storage_load_i32(NVS_NAMESPACE, NVS_KEY_RESULT, &stored, OTA_RESULT_NONE);
+    s_last_result = (ota_result_t)stored;
+
+    bool pending_verify = is_running_app_pending_verify();
+
+    // OTA pobrane, a dzialamy na starym (potwierdzonym) obrazie = bootloader cofnal aktualizacje
+    if (s_last_result == OTA_RESULT_PENDING && !pending_verify) {
+        ESP_LOGW(TAG, "Poprzednie OTA zostalo cofniete (rollback) - dziala poprzedni firmware");
+        set_result(OTA_RESULT_ROLLBACK);
+    }
+
+    if (!pending_verify) return; // zwykly start, nie pierwszy po OTA
 
     ESP_LOGW(TAG, "Pierwszy start po OTA - czekam na polaczenie z MQTT (max 15 min)");
     const esp_timer_create_args_t args = {
@@ -51,7 +74,26 @@ void ota_confirm_app_valid(void) {
     if (!is_running_app_pending_verify()) return;
 
     esp_ota_mark_app_valid_cancel_rollback();
+    set_result(OTA_RESULT_OK);
     ESP_LOGI(TAG, "Nowy firmware polaczyl sie z MQTT - potwierdzony, rollback anulowany");
+}
+
+void ota_report_timeout(void) {
+    set_result(OTA_RESULT_ERROR);
+}
+
+ota_result_t ota_last_result(void) {
+    return s_last_result;
+}
+
+const char *ota_result_str(ota_result_t result) {
+    switch (result) {
+        case OTA_RESULT_PENDING:  return "pending";
+        case OTA_RESULT_OK:       return "ok";
+        case OTA_RESULT_ERROR:    return "error";
+        case OTA_RESULT_ROLLBACK: return "rollback";
+        default:                  return "none";
+    }
 }
 
 void ota_task(void *pvParameter) {
@@ -78,9 +120,11 @@ void ota_task(void *pvParameter) {
     if (ret == ESP_OK) {
         // Restart wykonuje main w bezpiecznym miejscu (nie w trakcie zapisu bufora do flasha)
         ESP_LOGI(TAG, "OTA zakonczone sukcesem - restart po zakonczeniu cyklu.");
+        set_result(OTA_RESULT_PENDING); // po restarcie: ok (polaczenie z MQTT) albo rollback
         s_restart_pending = true;
     } else {
         ESP_LOGE(TAG, "Blad aktualizacji OTA: %s", esp_err_to_name(ret));
+        set_result(OTA_RESULT_ERROR);
         ESP_LOGW(TAG, "Nieudane OTA - main moze wylaczyc Wi-Fi i kontynuowac pomiary.");
     }
     s_ota_running = false;
