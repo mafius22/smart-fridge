@@ -16,4 +16,7 @@ void wifi_connect_stop(void);
 // Sprawdza status
 bool wifi_is_connected(void);
 
+// true = w NVS jest zapisana siec (SSID). Nowa plytka / po resecie fabrycznym = false
+bool wifi_has_credentials(void);
+
 #endif // WIFI_CONNECT_H

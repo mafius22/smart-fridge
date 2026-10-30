@@ -9,8 +9,6 @@
 
 static const char *TAG = "WIFI_CONN";
 
-#define DEFAULT_SSID      "TwojaSiec"
-#define DEFAULT_PASS      "TwojeHaslo"
 #define MAX_RETRY         3
 
 static EventGroupHandle_t s_wifi_event_group;
@@ -19,7 +17,8 @@ static EventGroupHandle_t s_wifi_event_group;
 
 static int s_retry_num = 0;
 static bool s_is_connected = false;
-static bool s_allow_reconnect = true; 
+static bool s_allow_reconnect = true;
+static bool s_has_credentials = false; // SSID zapisany przez BLE (nowa plytka / po resecie fabrycznym = brak)
 
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data) {
@@ -68,20 +67,34 @@ void wifi_connect_init(void) {
     wifi_config_t wifi_config = {0};
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     
-    storage_load_str("wifi", "ssid", (char*)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), DEFAULT_SSID);
-    storage_load_str("wifi", "pass", (char*)wifi_config.sta.password, sizeof(wifi_config.sta.password), DEFAULT_PASS);
+    storage_load_str("wifi", "ssid", (char*)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), "");
+    storage_load_str("wifi", "pass", (char*)wifi_config.sta.password, sizeof(wifi_config.sta.password), "");
+    s_has_credentials = (wifi_config.sta.ssid[0] != '\0');
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    
-    ESP_LOGI(TAG, "WiFi zainicjalizowane (Radio wylaczone).");
+
+    if (s_has_credentials) {
+        // Bez zapisanej sieci nie ustawiamy pustej konfiguracji - radio i tak nie jest wlaczane
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+        ESP_LOGI(TAG, "WiFi zainicjalizowane (Radio wylaczone).");
+    } else {
+        ESP_LOGW(TAG, "Brak zapisanej sieci Wi-Fi - skonfiguruj przez BLE.");
+    }
+}
+
+bool wifi_has_credentials(void) {
+    return s_has_credentials;
 }
 
 esp_err_t wifi_connect_start(void) {
     s_retry_num = 0;
-    s_allow_reconnect = true; 
-    
+    s_allow_reconnect = true;
+
     if (s_wifi_event_group == NULL) return ESP_FAIL;
+    if (!s_has_credentials) {
+        ESP_LOGW(TAG, "Brak konfiguracji Wi-Fi - pomijam laczenie.");
+        return ESP_FAIL;
+    }
 
     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
     

@@ -31,6 +31,9 @@ esp_err_t offline_buffer_add(SensorData data);
 // Liczba pomiarow czekajacych na wyslanie
 size_t offline_buffer_count(void);
 
+// Usuwa wszystkie zaleglosci (formatuje partycje) - reset fabryczny
+esp_err_t offline_buffer_erase_all(void);
+
 // Wysyla paczke rekordow. true = broker potwierdzil odbior
 typedef bool (*send_batch_callback_t)(const SensorData *items, size_t count);
 

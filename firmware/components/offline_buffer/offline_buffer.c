@@ -266,6 +266,19 @@ esp_err_t offline_buffer_add(SensorData data) {
     return err;
 }
 
+esp_err_t offline_buffer_erase_all(void) {
+    esp_err_t err = esp_spiffs_format(PARTITION_LABEL);
+    s_first_seg = 0;
+    s_last_seg = 0;
+    s_sent = 0;
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Formatowanie bufora nieudane: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGW(TAG, "Bufor wyczyszczony (partycja sformatowana)");
+    }
+    return err;
+}
+
 size_t offline_buffer_count(void) {
     if (s_first_seg == 0) {
         return 0;

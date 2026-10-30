@@ -10,6 +10,7 @@
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
+#include "esp_mac.h"
 
 #include "esp_bt.h"
 #include "esp_bt_main.h"
@@ -20,11 +21,17 @@
 static const char *TAG = "BLE_CONFIG";
 
 // --- KONFIGURACJA ---
-#define DEVICE_NAME             "ESP32_SMART_FRIDGE"
 #define BUTTON_HOLD_TIME_MS     4000
+#define FACTORY_RESET_HOLD_MS   10000           // trzymanie BOOT 10 s + puszczenie = reset fabryczny
 #define BLE_TIMEOUT_MS          (5 * 60 * 1000)
 #define LED_GPIO                GPIO_NUM_2
 #define LED_BLINK_MS            500
+
+// Wymogi WPA2 - zle dane nie sa zapisywane, telefon dostaje blad zapisu
+#define SSID_MAX_LEN            32
+#define PASS_MIN_LEN            8
+#define PASS_MAX_LEN            63
+#define BLE_ERR_INVALID_CREDENTIALS ((esp_gatt_status_t)0x80) // kod bledu aplikacji (zakres 0x80-0x9F)
 
 // --- UUID ---
 #define GATTS_SERVICE_UUID_TEST   0x00FF
@@ -38,6 +45,9 @@ static TimerHandle_t s_ble_timer = NULL;
 static gpio_num_t s_btn_gpio = GPIO_NUM_0;
 static bool s_ble_is_active = false;
 static bool s_ble_connected = false;
+static bool s_no_timeout = false;               // brak zapisanego Wi-Fi: BLE dziala az do skonfigurowania
+static char s_device_name[8];                   // "SF-DF38" - koncowka MAC, rozne dla kazdej plytki
+static factory_reset_cb_t s_factory_reset_cb = NULL;
 
 static char s_wifi_ssid[33] = {0};
 static char s_wifi_pass[65] = {0};
@@ -49,6 +59,21 @@ static uint16_t s_handle_action = 0;
 static void ble_timeout_callback(TimerHandle_t xTimer);
 static void ble_config_start(void);
 static void ble_config_stop_internal(void);
+
+static bool credentials_valid(void) {
+    size_t ssid_len = strlen(s_wifi_ssid);
+    size_t pass_len = strlen(s_wifi_pass);
+    if (ssid_len < 1 || ssid_len > SSID_MAX_LEN) {
+        ESP_LOGE(TAG, "Bledny SSID (dlugosc %u, wymagane 1-%d) - nie zapisuje", (unsigned)ssid_len, SSID_MAX_LEN);
+        return false;
+    }
+    if (pass_len < PASS_MIN_LEN || pass_len > PASS_MAX_LEN) {
+        ESP_LOGE(TAG, "Bledne haslo (dlugosc %u, wymagane %d-%d) - nie zapisuje",
+                 (unsigned)pass_len, PASS_MIN_LEN, PASS_MAX_LEN);
+        return false;
+    }
+    return true;
+}
 
 // ----------------------------------------------------------------------------
 //                              OBSŁUGA BLUETOOTH
@@ -82,7 +107,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param) {
     switch (event) {
         case ESP_GATTS_REG_EVT:
-            esp_ble_gap_set_device_name(DEVICE_NAME);
+            esp_ble_gap_set_device_name(s_device_name);
             esp_ble_gap_config_adv_data(&(esp_ble_adv_data_t){
                 .set_scan_rsp = false, .include_name = true, .include_txpower = true,
                 .min_interval = 0x20, .max_interval = 0x40, .appearance = 0x00,
@@ -118,7 +143,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
             else if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_ACTION) s_handle_action = param->add_char.attr_handle;
             break;
 
-        case ESP_GATTS_WRITE_EVT:
+        case ESP_GATTS_WRITE_EVT: {
             ESP_LOGI(TAG, "WRITE: hnd %d, len %d, prep %d, off %d", param->write.handle, param->write.len, param->write.is_prep, param->write.offset);
             if (s_ble_timer) xTimerReset(s_ble_timer, 0);
 
@@ -134,6 +159,12 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                 }
             }
 
+            // "1" na charakterystyce akcji = zapisz dane. Sprawdzamy je przed odpowiedzia, zeby telefon dostal blad
+            bool save_requested = (param->write.handle == s_handle_action && !param->write.is_prep &&
+                                   param->write.len > 0 && param->write.value[0] == '1');
+            bool save_ok = save_requested && credentials_valid();
+            esp_gatt_status_t status = (save_requested && !save_ok) ? BLE_ERR_INVALID_CREDENTIALS : ESP_GATT_OK;
+
             if (param->write.need_rsp) {
                 esp_gatt_rsp_t *rsp = (esp_gatt_rsp_t *)malloc(sizeof(esp_gatt_rsp_t));
                 if (rsp) {
@@ -147,22 +178,21 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                         memcpy(rsp->attr_value.value, param->write.value, param->write.len);
                     }
                     
-                    esp_err_t err = esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, ESP_GATT_OK, rsp);
+                    esp_err_t err = esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, status, rsp);
                     if (err != ESP_OK) ESP_LOGE(TAG, "Send Rsp Error: %d", err);
                     free(rsp);
                 }
             }
             
-            if (param->write.handle == s_handle_action && !param->write.is_prep) {
-                if (param->write.len > 0 && param->write.value[0] == '1') {
-                    ESP_LOGW(TAG, "ZAPIS I RESTART...");
-                    storage_save_str("wifi", "ssid", s_wifi_ssid);
-                    storage_save_str("wifi", "pass", s_wifi_pass);
-                    vTaskDelay(pdMS_TO_TICKS(500)); 
-                    esp_restart();
-                }
+            if (save_ok) {
+                ESP_LOGW(TAG, "ZAPIS I RESTART...");
+                storage_save_str("wifi", "ssid", s_wifi_ssid);
+                storage_save_str("wifi", "pass", s_wifi_pass);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                esp_restart();
             }
             break;
+        }
 
         case ESP_GATTS_EXEC_WRITE_EVT:
             ESP_LOGI(TAG, "EXEC WRITE (Koniec długiego zapisu)");
@@ -208,11 +238,15 @@ static void ble_config_start(void) {
     ESP_ERROR_CHECK(esp_ble_gatts_app_register(0));
 
     s_ble_is_active = true;
+    if (s_no_timeout) {
+        ESP_LOGW(TAG, "BLE GOTOWE jako %s (bez limitu czasu - czekam na konfiguracje Wi-Fi).", s_device_name);
+        return;
+    }
     if (s_ble_timer == NULL) {
         s_ble_timer = xTimerCreate("BLE_Kill_Timer", pdMS_TO_TICKS(BLE_TIMEOUT_MS), pdFALSE, (void*)0, ble_timeout_callback);
     }
     xTimerStart(s_ble_timer, 0);
-    ESP_LOGW(TAG, "BLE GOTOWE.");
+    ESP_LOGW(TAG, "BLE GOTOWE jako %s.", s_device_name);
 }
 
 static void ble_config_stop_internal(void) {
@@ -252,36 +286,48 @@ static void button_task(void *pvParam) {
     const int interval = 100;
     int led_ticks = 0;
     bool led_on = false;
-    bool wait_release = false;
+    bool ble_triggered = false;   // 4 s: BLE wlaczone w tym przytrzymaniu
+    bool reset_armed = false;     // 10 s: puszczenie przycisku = reset fabryczny
 
     while (1) {
         if (gpio_get_level(s_btn_gpio) == 0) {
-            if (!wait_release) {
-                hold_time += interval;
-                if (hold_time % 1000 == 0 && hold_time > 0) ESP_LOGD(TAG, "Trzymam: %d", hold_time);
+            hold_time += interval;
+            if (hold_time % 1000 == 0) ESP_LOGD(TAG, "Trzymam: %d", hold_time);
 
-                if (hold_time >= BUTTON_HOLD_TIME_MS) {
-                    ESP_LOGI(TAG, "Przycisk 4s -> START BLE");
+            if (hold_time >= BUTTON_HOLD_TIME_MS && !ble_triggered) {
+                ble_triggered = true;
+                ESP_LOGI(TAG, "Przycisk 4s -> START BLE");
 
-                    if (!s_ble_is_active) {
-                        ble_config_start();
-                        led_on = true;
-                        led_ticks = 0;
-                    } else {
-                        xTimerReset(s_ble_timer, 0);
-                        ESP_LOGI(TAG, "Przedluzono czas BLE.");
-                    }
-
-                    wait_release = true;
+                if (!s_ble_is_active) {
+                    ble_config_start();
+                    led_on = true;
+                    led_ticks = 0;
+                } else if (s_ble_timer) {
+                    xTimerReset(s_ble_timer, 0);
+                    ESP_LOGI(TAG, "Przedluzono czas BLE.");
                 }
             }
+
+            if (hold_time >= FACTORY_RESET_HOLD_MS && !reset_armed) {
+                reset_armed = true;
+                ESP_LOGW(TAG, "Przycisk 10s - pusc, aby wykonac RESET FABRYCZNY");
+            }
         } else {
+            if (reset_armed && s_factory_reset_cb) {
+                ESP_LOGW(TAG, "RESET FABRYCZNY");
+                gpio_set_level(LED_GPIO, 1);
+                s_factory_reset_cb(); // czysci dane i restartuje plytke - nie wraca
+            }
             hold_time = 0;
-            wait_release = false;
+            ble_triggered = false;
+            reset_armed = false;
         }
 
-        // Dioda: miga = rozglaszanie, swieci = telefon polaczony, zgaszona = BLE wylaczone
-        if (s_ble_is_active && !s_ble_connected) {
+        // Dioda: szybko miga = reset fabryczny po puszczeniu, miga = rozglaszanie,
+        // swieci = telefon polaczony, zgaszona = BLE wylaczone
+        if (reset_armed) {
+            led_on = !led_on;
+        } else if (s_ble_is_active && !s_ble_connected) {
             if (++led_ticks >= LED_BLINK_MS / interval) {
                 led_ticks = 0;
                 led_on = !led_on;
@@ -296,7 +342,19 @@ static void button_task(void *pvParam) {
     }
 }
 
-void ble_config_init(gpio_num_t boot_btn_gpio) {
-    s_btn_gpio = boot_btn_gpio; 
+void ble_config_init(gpio_num_t boot_btn_gpio, bool start_now, factory_reset_cb_t factory_reset_cb) {
+    s_btn_gpio = boot_btn_gpio;
+    s_factory_reset_cb = factory_reset_cb;
+
+    // Nazwa z koncowki MAC - przy kilku plytkach wiadomo, z ktora sie laczymy
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(s_device_name, sizeof(s_device_name), "SF-%02X%02X", mac[4], mac[5]);
+
+    if (start_now) {
+        // Brak zapisanego Wi-Fi (nowa plytka / po resecie fabrycznym): BLE od razu, az do skonfigurowania
+        s_no_timeout = true;
+        ble_config_start();
+    }
     xTaskCreate(button_task, "ble_btn_task", 4096, NULL, 10, NULL);
 }

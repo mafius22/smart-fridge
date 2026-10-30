@@ -6,6 +6,7 @@
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
 #include "esp_system.h"
+#include "nvs_flash.h"
 #include "esp_app_desc.h"
 #include "esp_wifi.h"
 #include "driver/gpio.h"
@@ -218,6 +219,19 @@ static void publish_status(const uint64_t *sensor_roms, int sensor_count) {
     s_last_status_ota = ota;
 }
 
+// Reset fabryczny (BOOT 10 s, wolany z taska przycisku): caly NVS (Wi-Fi, licznik bufora, wynik OTA)
+// i zalegle pomiary - przy sprzedazy/przeniesieniu nic nie trafi na konto poprzedniego wlasciciela.
+// Przerwany zapis main nie ma znaczenia - partycje i tak sa czyszczone.
+static void factory_reset(void) {
+    offline_buffer_erase_all();
+    esp_err_t err = nvs_flash_erase();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Czyszczenie NVS nieudane: %s", esp_err_to_name(err));
+    }
+    ESP_LOGW(TAG, "Reset fabryczny zakonczony - restart");
+    esp_restart();
+}
+
 // Restart tylko z petli glownej, gdy nic nie jest zapisywane do flasha
 static void restart_safely(const char *reason) {
     ESP_LOGW(TAG, "Restart: %s", reason);
@@ -239,8 +253,9 @@ void app_main(void) {
 
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     offline_buffer_init();
-    ble_config_init(GPIO_NUM_0); 
     wifi_connect_init();
+    // Brak zapisanej sieci (nowa plytka / po resecie fabrycznym) = BLE od razu, bez limitu czasu
+    ble_config_init(GPIO_NUM_0, !wifi_has_credentials(), factory_reset);
 
     // 2. Inicjalizacja OneWire (wykonujemy raz przed pętlą)
     onewire_bus_handle_t bus = NULL;
@@ -335,10 +350,17 @@ void app_main(void) {
              ESP_LOGW(TAG, "⚠️ CZAS NIEPRAWIDŁOWY (1970). Dane nie będą buforowane!");
         }
 
-        // 1. Pomiar wszystkich czujnikow (kazdy z wlasnym znacznikiem czasu)
+        // 1. Pomiar wszystkich czujnikow (kazdy z wlasnym znacznikiem czasu).
+        // Plytka bez zapisanej sieci (nowa / po resecie fabrycznym) nie ma wlasciciela - nie zbiera pomiarow,
+        // inaczej po konfiguracji na konto nowego wlasciciela trafilyby pomiary sprzed przekazania.
         static SensorData readings[MAX_SENSORS];
         int reading_count = 0;
-        for (int i = 0; i < ds18b20_device_num; i++) {
+        int sensors_to_read = ds18b20_device_num;
+        if (!wifi_has_credentials()) {
+            ESP_LOGW(TAG, "Plytka nieskonfigurowana (brak Wi-Fi) - pomijam pomiary, czekam na konfiguracje BLE");
+            sensors_to_read = 0;
+        }
+        for (int i = 0; i < sensors_to_read; i++) {
             esp_task_wdt_reset();
             ESP_LOGI(TAG, "--- Czujnik %d ---", i);
 
