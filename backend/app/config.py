@@ -7,8 +7,7 @@ load_dotenv()
 
 
 def _database_url():
-    url = os.getenv("DATABASE_URL", "sqlite:///smartfridge.db")
-    # Heroku/Render podaja stary prefiks, ktorego SQLAlchemy 2 nie obsluguje
+    url = os.getenv("DATABASE_URL") or "sqlite:///smartfridge.db"
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
     return url
@@ -55,6 +54,12 @@ class Config:
     ALERT_HYSTERESIS = 0.5
     OFFLINE_FACTOR = 3
     DEFAULT_INTERVAL_S = 300
+    # Awaria -127 otwiera sie od razu, zamyka dopiero po tylu sekundach poprawnych odczytow (migajacy czujnik = 1 awaria)
+    SENSOR_RECOVERY_S = 10 * 60
+    # Podsumowanie przerwy w lacznosci po tylu sekundach od powrotu plytki (czas na doslanie calego bufora)
+    OUTAGE_SUMMARY_DELAY_S = 5 * 60
+    # Maksymalne opoznienie powiadomienia o temperaturze ustawiane przez uzytkownika
+    MAX_ALERT_DELAY_MIN = 240
 
 
 class DevelopmentConfig(Config):

@@ -55,12 +55,12 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env          # fill in MQTT, VAPID, secrets
-flask --app run db upgrade      # create / migrate the database (instance/smartfridge.db)
-flask --app run create-admin    # first administrator (password prompted, not echoed)
-python run.py                   # API on http://localhost:5000/api + MQTT ingest + offline checks
-python -m pytest                # tests
+flask --app run db upgrade      # create / migrate the database
+flask --app run create-admin    # first administrator
+python run.py                   
+python -m pytest                
 ```
-Run the backend as a **single process** (`gunicorn -w 1 wsgi:app`): it holds a persistent MQTT session (`MQTT_CLIENT_ID`) and the offline-detection scheduler.
+Run the backend as a **single process with several threads** (`gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 wsgi:app`, Linux only): it holds a persistent MQTT session (`MQTT_CLIENT_ID`) and the offline-detection scheduler, so more worker processes would duplicate them; the default sync worker without `--threads` would serve one request at a time. Use `flask --app run ...` (not `--app wsgi`) for CLI commands - importing `wsgi` starts MQTT.
 
 ### Frontend (`/frontend`)
 ```powershell
@@ -70,8 +70,6 @@ npm run dev                     # http://localhost:5173, /api proxied to the bac
 ```
 
 ### Accounts and access
-* The admin creates user accounts (users change the initial password at first login) and grants access to fridges.
+* The admin creates user accounts and grants access to fridges.
 * Boards and sensors register themselves on the first MQTT message; the admin assigns a sensor to a fridge.
 * Every user sets their own min/max thresholds, notifications, fridge names and folders.
-
-MQTT interface of the firmware: `docs/firmware_backend_interface.md`. REST API: `docs/backend_api.md`.
