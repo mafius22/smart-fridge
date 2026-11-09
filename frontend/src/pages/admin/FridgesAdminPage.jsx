@@ -51,6 +51,24 @@ export default function FridgesAdminPage() {
     act(() => api.patch(`/admin/fridges/${f.id}`, { name: name.trim(), location: location.trim() || null }));
   };
 
+  const remove = async (f) => {
+    if (!window.confirm(`Usunąć lodówkę „${f.name}”?`)) return;
+    try {
+      const res = await api.delete(`/admin/fridges/${f.id}`);
+      setMessage({ type: 'success', text: res.data.message });
+      await load();
+    } catch (err) {
+      if (err.response?.data?.code !== 'has_history') return setMessage({ type: 'error', text: apiError(err) });
+      // Lodowka z historia: usuniecie na stale tylko po wpisaniu nazwy
+      const typed = window.prompt(
+        `${apiError(err)}\n\nUsunięcia NIE da się cofnąć: znikną pomiary, alarmy oraz dostępy i ustawienia użytkowników.\n`
+        + `Zamiast tego możesz odznaczyć „Aktywna”.\n\nAby usunąć na stałe, wpisz nazwę lodówki: ${f.name}`,
+      );
+      if (typed === null) return;
+      act(() => api.delete(`/admin/fridges/${f.id}`, { params: { force: 1 }, data: { confirm_name: typed.trim() } }), 'Usunięto lodówkę z historią');
+    }
+  };
+
   const assign = (f) => {
     const sensorId = choice[f.id];
     if (!sensorId) return;
@@ -122,7 +140,8 @@ export default function FridgesAdminPage() {
                 <td>{formatTemp(f.last_temp)} °C <div className="muted small">{timeAgo(f.last_ts)}</div></td>
                 <td>{f.users_count}</td>
                 <td>
-                  <input type="checkbox" checked={f.is_active} onChange={(e) => act(() => api.patch(`/admin/fridges/${f.id}`, { is_active: e.target.checked }))} />
+                  <input type="checkbox" checked={f.is_active} title="Wyłączona: niewidoczna dla użytkowników, bez alarmów; historia zostaje"
+                    onChange={(e) => act(() => api.patch(`/admin/fridges/${f.id}`, { is_active: e.target.checked }))} />
                 </td>
                 <td className="row-actions">
                   {f.sensor && (
@@ -132,8 +151,7 @@ export default function FridgesAdminPage() {
                     </button>
                   )}
                   <button className="btn btn-ghost btn-icon" title="Edytuj" onClick={() => edit(f)}><Pencil size={16} /></button>
-                  <button className="btn btn-ghost btn-icon danger" title="Usuń"
-                    onClick={() => window.confirm(`Usunąć lodówkę „${f.name}”?`) && act(() => api.delete(`/admin/fridges/${f.id}`), 'Usunięto lodówkę')}>
+                  <button className="btn btn-ghost btn-icon danger" title="Usuń" onClick={() => remove(f)}>
                     <Trash2 size={16} />
                   </button>
                 </td>

@@ -7,7 +7,7 @@ import StateBadge from '../components/StateBadge';
 import TemperatureChart from '../components/TemperatureChart';
 import FridgeSettingsForm from '../components/FridgeSettingsForm';
 import usePolling from '../utils/usePolling';
-import { ALERT_LABELS, formatDateTime, formatDuration, formatTemp, timeAgo } from '../utils/format';
+import { ALERT_LABELS, alertOutcome, formatDateTime, formatDuration, formatTemp, timeAgo } from '../utils/format';
 
 const RANGES = [
   { key: '24h', label: '24 h', seconds: 86400 },
@@ -113,9 +113,19 @@ export default function FridgePage() {
       {activeAlerts.length > 0 && (
         <div className="card active-alerts">
           {activeAlerts.map((a) => (
-            <div key={a.id} className={`alert ${a.is_fault ? 'alert-fault' : 'alert-error'}`}>
-              <strong>{ALERT_LABELS[a.kind]}</strong>
-              {a.value != null && ` (${a.value.toFixed(1)} °C)`} od {formatDateTime(a.started_at)}
+            <div key={a.id} className={`alert ${a.is_fault ? 'alert-fault' : a.pending ? 'alert-warn' : 'alert-error'}`}>
+              {a.recovers_at ? (
+                <>
+                  <strong>Czujnik znów odpowiada</strong> - awaria zamknie się ok.{' '}
+                  {format(new Date(a.recovers_at * 1000), 'HH:mm')}, jeśli do tego czasu nie będzie -127
+                </>
+              ) : (
+                <>
+                  <strong>{ALERT_LABELS[a.kind]}</strong>
+                  {a.value != null && ` (${a.value.toFixed(1)} °C)`} od {formatDateTime(a.started_at)}
+                  {a.pending && ` - powiadomienie, jeśli potrwa dłużej niż ${fridge.settings.alert_delay_min} min`}
+                </>
+              )}
             </div>
           ))}
         </div>
@@ -182,14 +192,18 @@ export default function FridgePage() {
           <p className="muted">Brak zakończonych alarmów.</p>
         ) : (
           <table className="table">
-            <thead><tr><th>Rodzaj</th><th>Początek</th><th>Czas trwania</th><th>Wartość</th></tr></thead>
+            <thead><tr><th>Rodzaj</th><th>Początek</th><th>Czas trwania</th><th>Wartość</th><th>Zakończenie</th></tr></thead>
             <tbody>
               {pastAlerts.map((a) => (
                 <tr key={a.id}>
                   <td>{ALERT_LABELS[a.kind]}</td>
                   <td>{formatDateTime(a.started_at)}</td>
                   <td>{formatDuration(a.ended_at - a.started_at)}</td>
-                  <td>{a.value != null ? `${a.value.toFixed(1)} °C` : '-'}</td>
+                  <td>
+                    {a.value != null ? `${a.value.toFixed(1)} °C` : '-'}
+                    {a.threshold != null && <span className="muted small"> (próg {a.threshold} °C)</span>}
+                  </td>
+                  <td className="small">{alertOutcome(a)}</td>
                 </tr>
               ))}
             </tbody>

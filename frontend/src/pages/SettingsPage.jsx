@@ -71,6 +71,14 @@ export default function SettingsPage() {
           />
           Wysyłaj mi powiadomienia (wyłączenie wstrzymuje wszystkie, alarmy nadal są zapisywane)
         </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={Boolean(user.show_short_alerts)}
+            onChange={(e) => saveProfile({ show_short_alerts: e.target.checked })}
+          />
+          Pokazuj w historii alarmów krótkie przekroczenia (krótsze niż ustawione opóźnienie, bez powiadomienia)
+        </label>
 
         <div className="push-box">
           <div>

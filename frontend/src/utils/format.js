@@ -34,6 +34,7 @@ export function thresholdsLabel(settings) {
 
 export const STATE_LABELS = {
   ok: 'OK',
+  pending: 'Przekroczenie',
   alarm: 'Alarm',
   fault: 'Awaria',
   offline: 'Offline',
@@ -48,6 +49,22 @@ export const ALERT_LABELS = {
   sensor_missing: 'Czujnik odłączony',
   offline: 'Płytka offline',
 };
+
+const END_REASON_LABELS = {
+  prefs_changed: 'zmiana ustawień',
+  access_removed: 'odebrany dostęp',
+  sensor_changed: 'zmiana czujnika',
+  fridge_disabled: 'lodówka wyłączona',
+  board_disabled: 'płytka wyłączona',
+  user_blocked: 'konto zablokowane',
+};
+
+// Jak zakonczyl sie alarm - historia odroznia powrot do normy od zamkniecia przez zmiane ustawien
+export function alertOutcome(alert) {
+  if (alert.end_reason === 'outage') return 'w czasie przerwy w łączności (z bufora)';
+  if (alert.end_reason === 'normal') return alert.notified_at ? 'wróciło do normy' : 'krótsze niż opóźnienie - bez powiadomienia';
+  return END_REASON_LABELS[alert.end_reason] || '-';
+}
 
 export function randomPassword(length = 12) {
   const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';

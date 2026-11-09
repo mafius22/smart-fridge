@@ -35,7 +35,11 @@ export default function FridgeCard({ fridge, folders, onMove }) {
 
       {fridge.alerts.length > 0 && (
         <ul className="alert-chips">
-          {fridge.alerts.map((a) => <li key={a.id} className={a.is_fault ? 'chip chip-fault' : 'chip chip-alarm'}>{ALERT_LABELS[a.kind]}</li>)}
+          {fridge.alerts.map((a) => (
+            <li key={a.id} className={`chip ${a.is_fault ? 'chip-fault' : a.pending ? 'chip-pending' : 'chip-alarm'}`}>
+              {a.recovers_at ? 'Czujnik znów odpowiada' : ALERT_LABELS[a.kind]}
+            </li>
+          ))}
         </ul>
       )}
 

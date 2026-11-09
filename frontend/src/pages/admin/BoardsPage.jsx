@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Download, Pencil, RotateCcw } from 'lucide-react';
+import { Download, Pencil, Power, RotateCcw, Trash2 } from 'lucide-react';
 import api, { apiError } from '../../api/client';
 import usePolling from '../../utils/usePolling';
 import { formatDateTime, formatTemp, timeAgo } from '../../utils/format';
@@ -49,6 +49,25 @@ export default function BoardsPage() {
     if (url) act(() => api.post(`/admin/boards/${b.id}/update`, { url: url.trim() }));
   };
 
+  const toggleActive = (b) => {
+    const text = b.is_active
+      ? `Wyłączyć ${b.name || b.id}? Backend przestanie zapisywać jej pomiary i alarmować; aktywne alarmy jej lodówek zostaną zamknięte.`
+      : `Włączyć ${b.name || b.id}? Pomiary znów będą zapisywane.`;
+    if (window.confirm(text)) act(() => api.patch(`/admin/boards/${b.id}`, { is_active: !b.is_active }));
+  };
+
+  const removeBoard = (b) => {
+    if (window.confirm(`Usunąć ${b.name || b.id} razem z jej czujnikami i ich pomiarami bez lodówki? Włączona płytka pojawi się ponownie - żeby ją odciąć, użyj „Wyłącz”.`)) {
+      act(() => api.delete(`/admin/boards/${b.id}`));
+    }
+  };
+
+  const removeSensor = (s) => {
+    if (window.confirm(`Usunąć czujnik ${s.id} i jego pomiary? Jeśli jest nadal podłączony, pojawi się ponownie po pomiarze.`)) {
+      act(() => api.delete(`/admin/sensors/${s.id}`));
+    }
+  };
+
   if (boards === null) return <div className="page-loading">{message?.text || 'Ładowanie…'}</div>;
 
   return (
@@ -59,13 +78,15 @@ export default function BoardsPage() {
 
       <div className="board-grid">
         {boards.map((b) => (
-          <section key={b.id} className="card board-card">
+          <section key={b.id} className={`card board-card ${b.is_active ? '' : 'board-disabled'}`}>
             <div className="card-header">
               <div>
                 <h2>{b.name || b.id}</h2>
                 {b.name && <div className="mono muted small">{b.id}</div>}
               </div>
-              <span className={`badge ${b.online ? 'badge-ok' : 'badge-offline'}`}>{b.online ? 'online' : 'offline'}</span>
+              {b.is_active
+                ? <span className={`badge ${b.online ? 'badge-ok' : 'badge-offline'}`}>{b.online ? 'online' : 'offline'}</span>
+                : <span className="badge badge-offline">wyłączona</span>}
             </div>
 
             <dl className="kv">
@@ -86,6 +107,9 @@ export default function BoardsPage() {
                     <span className="mono small">{s.id}</span>
                     <span>{formatTemp(s.last_temp)} °C</span>
                     <span className="muted small">{s.fridge ? s.fridge.name : 'nieprzypisany'}{!s.present && ' · brak w statusie'}</span>
+                    {!s.fridge && (
+                      <button className="btn btn-ghost btn-icon danger" title="Usuń czujnik" onClick={() => removeSensor(s)}><Trash2 size={14} /></button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -95,6 +119,8 @@ export default function BoardsPage() {
               <button className="btn btn-secondary btn-sm" onClick={() => rename(b)}><Pencil size={14} /> Nazwa</button>
               <button className="btn btn-secondary btn-sm" onClick={() => reset(b)}><RotateCcw size={14} /> Restart</button>
               <button className="btn btn-secondary btn-sm" onClick={() => update(b)}><Download size={14} /> Aktualizuj firmware</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => toggleActive(b)}><Power size={14} /> {b.is_active ? 'Wyłącz' : 'Włącz'}</button>
+              <button className="btn btn-ghost btn-sm danger" onClick={() => removeBoard(b)}><Trash2 size={14} /> Usuń</button>
             </div>
           </section>
         ))}

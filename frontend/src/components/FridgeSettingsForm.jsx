@@ -2,6 +2,7 @@ import { useState } from 'react';
 import api, { apiError } from '../api/client';
 
 const toInput = (v) => (v === null || v === undefined ? '' : String(v));
+const MAX_DELAY_MIN = 240;
 
 function parseTemp(value) {
   const normalized = value.trim().replace(',', '.');
@@ -19,6 +20,7 @@ export default function FridgeSettingsForm({ fridge, folders, onSaved }) {
     notify_low: fridge.settings.notify_low,
     notify_high: fridge.settings.notify_high,
     notify_fault: fridge.settings.notify_fault,
+    alert_delay_min: String(fridge.settings.alert_delay_min ?? 0),
   }));
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -31,6 +33,10 @@ export default function FridgeSettingsForm({ fridge, folders, onSaved }) {
     const max = parseTemp(form.max_temp);
     if (Number.isNaN(min) || Number.isNaN(max)) return setMessage({ type: 'error', text: 'Progi muszą być liczbami' });
     if (min !== null && max !== null && min >= max) return setMessage({ type: 'error', text: 'Próg minimalny musi być niższy od maksymalnego' });
+    const delay = form.alert_delay_min.trim() === '' ? 0 : Number(form.alert_delay_min);
+    if (!Number.isInteger(delay) || delay < 0 || delay > MAX_DELAY_MIN) {
+      return setMessage({ type: 'error', text: `Opóźnienie musi być liczbą minut od 0 do ${MAX_DELAY_MIN}` });
+    }
 
     setBusy(true);
     try {
@@ -42,6 +48,7 @@ export default function FridgeSettingsForm({ fridge, folders, onSaved }) {
         notify_low: form.notify_low,
         notify_high: form.notify_high,
         notify_fault: form.notify_fault,
+        alert_delay_min: delay,
       });
       setMessage({ type: 'success', text: 'Zapisano' });
       onSaved?.(res.data.fridge);
@@ -89,14 +96,23 @@ export default function FridgeSettingsForm({ fridge, folders, onSaved }) {
         </div>
       </div>
 
+      <label className="field">
+        <span>Powiadom, gdy temperatura jest poza progiem dłużej niż (min)</span>
+        <input type="number" min={0} max={MAX_DELAY_MIN} step={1} value={form.alert_delay_min} onChange={set('alert_delay_min')} />
+      </label>
+      <p className="muted small">
+        0 = od razu. Dla lodówek z odszranianiem albo często otwieranych zwykle 20-45 min - krótsze przekroczenie
+        widać w aplikacji jako „Przekroczenie”, ale bez powiadomienia.
+      </p>
+
       <label className="check">
         <input type="checkbox" checked={form.notify_fault} onChange={set('notify_fault')} />
-        Powiadom o awariach (płytka offline, czujnik nie odpowiada lub odłączony)
+        Powiadom o awariach (płytka offline, czujnik nie odpowiada lub odłączony) - zawsze od razu
       </label>
 
       <p className="muted small">
         Alarm przychodzi raz, gdy temperatura przekroczy próg, i drugi raz, gdy wróci do normy
-        (co najmniej 0,5 °C od progu). Alarmy dotyczą tylko bieżących pomiarów.
+        (co najmniej 0,5 °C od progu). Przekroczenia z czasu przerwy w łączności dostaniesz jako jedno podsumowanie.
       </p>
 
       {message && <div className={`alert alert-${message.type}`}>{message.text}</div>}
