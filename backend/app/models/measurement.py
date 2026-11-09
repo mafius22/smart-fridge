@@ -1,29 +1,25 @@
 from app.extensions import db
-from datetime import datetime, timezone
-from datetime import datetime, timezone
+
+# SQLite nadaje autoinkrementacje tylko kolumnie INTEGER
+BigIntId = db.BigInteger().with_variant(db.Integer(), "sqlite")
+
 
 class Measurement(db.Model):
-    __tablename__ = 'measurements'
+    __tablename__ = "measurements"
 
-    id = db.Column(db.Integer, primary_key=True)
-    device_id = db.Column(db.String(50), db.ForeignKey('devices.id'), nullable=False, index=True)
-    
-    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-    esp_timestamp = db.Column(db.BigInteger)
-    
-    temperature = db.Column(db.Float)
-    pressure = db.Column(db.Float)
+    id = db.Column(BigIntId, primary_key=True)
+    sensor_id = db.Column(db.String(16), db.ForeignKey("sensors.id"), nullable=False)
+    # Lodowka z przypisania obowiazujacego w chwili pomiaru (NULL = czujnik nieprzypisany)
+    fridge_id = db.Column(db.Integer, db.ForeignKey("fridges.id"), nullable=True)
+
+    # Epoch UTC z plytki; czas serwera, gdy plytka nie miala czasu (ts_from_server = True)
+    ts = db.Column(db.BigInteger, nullable=False)
+    ts_from_server = db.Column(db.Boolean, nullable=False, default=False)
+    temperature = db.Column(db.Float, nullable=False)
+    received_at = db.Column(db.BigInteger, nullable=False)
 
     __table_args__ = (
-        db.Index('idx_device_time', 'device_id', 'timestamp'),
+        # Plytka moze wyslac paczke ponownie (restart w trakcie wysylki bufora)
+        db.UniqueConstraint("sensor_id", "ts"),
+        db.Index("ix_measurements_fridge_ts", "fridge_id", "ts"),
     )
-
-    def to_dict(self):
-        dt_object = datetime.fromtimestamp(self.esp_timestamp, timezone.utc)
-        
-        return {
-            "device": self.device_id,
-            "temp": self.temperature,
-            "press": self.pressure,
-            "time": dt_object.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-        }
