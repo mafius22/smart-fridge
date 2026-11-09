@@ -101,14 +101,119 @@ def test_low_alarm_and_disabling_closes_silently(app, fridge, user, pushes):
 
 def test_sensor_error_fault(app, fridge, admin, user, pushes):
     now = now_ts()
-    ingest_data(BOARD, _data((now - 30, -127.0)))
+    ingest_data(BOARD, _data((now - 700, -127.0)))
     db.session.commit()
     assert Alert.query.filter_by(kind="sensor_error", ended_at=None, user_id=None).count() == 1
     assert {p["user_id"] for p in pushes} == {admin.id, user.id}
 
+    # Awaria otwiera sie od razu, ale zamyka dopiero po 10 min poprawnych odczytow
+    ingest_data(BOARD, _data((now - 300, 4.0)))
+    db.session.commit()
+    assert Alert.query.filter_by(kind="sensor_error", ended_at=None).count() == 1
+    # Interfejs pokazuje, kiedy awaria sie zamknie (czujnik znow odpowiada)
+    from app.services.fridge_service import fridge_summaries
+    [summary] = fridge_summaries(user, [fridge])
+    [fault] = [a for a in summary["alerts"] if a["kind"] == "sensor_error"]
+    assert fault["recovers_at"] == now - 700 + app.config["SENSOR_RECOVERY_S"]
+
     ingest_data(BOARD, _data((now, 4.0)))
     db.session.commit()
     assert Alert.query.filter_by(kind="sensor_error", ended_at=None).count() == 0
+    assert [p["title"].split(":")[0] for p in pushes] == ["AWARIA", "AWARIA", "OK", "OK"]
+
+
+def test_flapping_sensor_gives_one_fault(app, fridge, admin, pushes):
+    now = now_ts()
+    for i, temp in enumerate([-127.0, 4.0, -127.0, 4.0, -127.0]):
+        ingest_data(BOARD, _data((now - 600 + i * 120, temp)))
+        db.session.commit()
+    assert Alert.query.filter_by(kind="sensor_error").count() == 1
+    assert [p["title"].split(":")[0] for p in pushes if p["user_id"] == admin.id] == ["AWARIA"]
+
+
+def test_delay_short_excursion_is_silent(app, fridge, user, pushes):
+    now = now_ts()
+    prefs = db.session.get(UserFridge, (user.id, fridge.id))
+    prefs.alert_delay_min = 20
+    db.session.commit()
+
+    ingest_data(BOARD, _data((now - 880, 9.0)))     # poczatek przekroczenia (odszranianie)
+    ingest_data(BOARD, _data((now - 600, 9.5)))     # 5 min < 20 min
+    db.session.commit()
+    alert = Alert.query.filter_by(kind="high", ended_at=None).one()
+    assert alert.notified_at is None
+    assert pushes == []
+
+    ingest_data(BOARD, _data((now - 300, 7.0)))     # powrot przed uplywem opoznienia
+    db.session.commit()
+    assert Alert.query.filter_by(kind="high", ended_at=None).count() == 0
+    assert pushes == []
+
+
+def test_delay_long_excursion_notifies(app, fridge, user, pushes):
+    now = now_ts()
+    prefs = db.session.get(UserFridge, (user.id, fridge.id))
+    prefs.alert_delay_min = 10
+    db.session.commit()
+
+    ingest_data(BOARD, _data((now - 840, 9.0)))
+    ingest_data(BOARD, _data((now - 540, 7.8)))     # w histerezie - licznik dalej biegnie, bez push
+    ingest_data(BOARD, _data((now - 240, 9.2)))     # 10 min od poczatku
+    db.session.commit()
+    assert [p["title"].split(":")[0] for p in pushes] == ["ALARM"]
+    assert "od 10 min" in pushes[0]["body"]
+    alert = Alert.query.filter_by(kind="high", ended_at=None).one()
+    assert alert.notified_at is not None and alert.threshold == 8.0
+
+    ingest_data(BOARD, _data((now - 60, 7.0)))
+    db.session.commit()
+    assert [p["title"].split(":")[0] for p in pushes] == ["ALARM", "OK"]
+
+
+def test_inactive_board_is_ignored(app, fridge, pushes):
+    now = now_ts()
+    board = db.session.get(Board, BOARD)
+    board.is_active = False
+    db.session.commit()
+
+    ingest_data(BOARD, _data((now - 60, 20.0)))
+    db.session.commit()
+    assert Measurement.query.filter_by(ts=now - 60).count() == 0
+    assert board.last_seen_at >= now               # wiadomo, ze nadal nadaje
+
+    board.last_seen_at = now - 5000
+    alert_service.check_offline(now)
+    db.session.commit()
+    assert Alert.query.count() == 0
+    assert pushes == []
+
+
+def test_outage_summary(app, fridge, user, pushes):
+    now = now_ts()
+    board = db.session.get(Board, BOARD)
+    board.last_seen_at = now - 7000
+    alert_service.check_offline(now - 3000)        # awaria offline w trakcie przerwy
+    db.session.commit()
+
+    # Powrot plytki: biezacy pomiar + bufor z czasu przerwy (pik 9.5 °C, juz minal)
+    ingest_data(BOARD, _data((now - 600, 4.0)))
+    ingest_data(BOARD, _data((now - 5000, 5.0), (now - 4000, 9.5), (now - 3500, 8.5), (now - 2000, 4.5)))
+    db.session.commit()
+    offline = Alert.query.filter_by(kind="offline").one()
+    assert offline.ended_at is not None
+    offline.ended_at = now - 600                   # "5 min temu" - caly bufor doszedl
+
+    pushes.clear()
+    alert_service.send_outage_summaries(now)
+    db.session.commit()
+    assert len(pushes) == 1 and pushes[0]["title"].startswith("W CZASIE PRZERWY")
+    assert "max 9.5" in pushes[0]["body"]
+    summary = Alert.query.filter_by(kind="high", end_reason="outage").one()
+    assert summary.ended_at is not None and summary.value == 9.5
+
+    alert_service.send_outage_summaries(now + 60)  # tylko raz
+    db.session.commit()
+    assert len(pushes) == 1
 
 
 def test_status_sensor_missing_and_retained(app, fridge, pushes):

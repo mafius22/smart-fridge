@@ -67,6 +67,15 @@ class MqttIngestClient:
         logger.info(f"Komenda {command} -> {board_id}: {payload}")
         return info.rc == mqtt.MQTT_ERR_SUCCESS
 
+    def clear_retained(self, board_id):
+        """Pusta wiadomosc retained usuwa z brokera zapamietany status i nieodebrane komendy usunietej plytki."""
+        if self.connected_since is None:
+            return False
+        for kind in ("status",) + COMMANDS:
+            self.client.publish(f"{TOPIC_PREFIX}/{board_id}/{kind}", b"", qos=1, retain=True)
+        logger.info(f"Wyczyszczono wiadomości retained płytki {board_id}")
+        return True
+
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code.is_failure:
             logger.error(f"❌ Błąd połączenia MQTT: {reason_code}")

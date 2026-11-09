@@ -24,6 +24,7 @@ def user_to_dict(user):
         "display_name": user.display_name,
         "must_change_password": user.must_change_password,
         "notifications_enabled": user.notifications_enabled,
+        "show_short_alerts": user.show_short_alerts,
     }
 
 
@@ -82,6 +83,8 @@ def update_me():
         current_user.display_name = get_str(data, "display_name", 100, allow_none=True)
     if "notifications_enabled" in data:
         current_user.notifications_enabled = get_bool(data, "notifications_enabled")
+    if "show_short_alerts" in data:
+        current_user.show_short_alerts = get_bool(data, "show_short_alerts")
     db.session.commit()
     return jsonify({"user": user_to_dict(current_user)})
 

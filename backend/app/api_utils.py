@@ -62,6 +62,16 @@ def get_float(data, key, lo, hi):
     return float(value)
 
 
+def get_int(data, key, lo, hi):
+    """Liczba calkowita z body. Wywolywac tylko, gdy key in data."""
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ApiError(f"Pole {key} musi być liczbą całkowitą", 400, "validation")
+    if not lo <= value <= hi:
+        raise ApiError(f"Pole {key} musi być w zakresie {lo}..{hi}", 400, "validation")
+    return value
+
+
 def get_bool(data, key):
     value = data[key]
     if not isinstance(value, bool):

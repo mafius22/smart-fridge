@@ -3,7 +3,7 @@ from sqlalchemy import BigInteger, func, literal_column
 
 from app.extensions import db
 from app.models import Board, Measurement, Sensor, SensorAssignment, UserFridge
-from app.models.alert import FAULT_KINDS, KIND_OFFLINE
+from app.models.alert import FAULT_KINDS, KIND_OFFLINE, KIND_SENSOR_ERROR
 from app.services import alert_service
 from app.utils import now_ts
 
@@ -18,7 +18,7 @@ MAX_RANGE_S = 400 * 86400
 
 
 def board_online(board, now):
-    if board is None or board.last_seen_at is None:
+    if board is None or board.last_seen_at is None or not board.is_active:
         return False
     cfg = current_app.config
     return now - board.last_seen_at <= cfg["OFFLINE_FACTOR"] * (board.interval_s or cfg["DEFAULT_INTERVAL_S"])
@@ -45,19 +45,23 @@ def prefs_to_dict(prefs):
         "notify_low": prefs.notify_low if prefs and prefs.notify_low is not None else True,
         "notify_high": prefs.notify_high if prefs and prefs.notify_high is not None else True,
         "notify_fault": prefs.notify_fault if prefs and prefs.notify_fault is not None else True,
+        "alert_delay_min": prefs.alert_delay_min if prefs and prefs.alert_delay_min is not None else 0,
     }
 
 
 def _state(sensor, board, alerts, online):
     if sensor is None:
         return "no_sensor"
-    kinds = {a.kind for a in alerts}
+    # Przekroczenie w trakcie opoznienia (bez powiadomienia) to "pending", nie "alarm"
+    kinds = {a.kind for a in alerts if a.notified_at is not None}
     if KIND_OFFLINE in kinds or not online:
         return "offline"
     if kinds & set(FAULT_KINDS):
         return "fault"
     if kinds:
         return "alarm"
+    if alerts:
+        return "pending"
     if sensor.last_ts is None:
         return "no_data"
     return "ok"
@@ -93,10 +97,21 @@ def fridge_summaries(user, fridges):
             "last_temp": sensor.last_temp if sensor else None,
             "last_ts": sensor.last_ts if sensor else None,
             "board": {"id": board.id, "online": online, "last_seen_at": board.last_seen_at} if board else None,
-            "alerts": [alert_service.alert_to_dict(a) for a in fridge_alerts],
+            "alerts": [_alert_dict(a, sensor) for a in fridge_alerts],
             "state": _state(sensor, board, fridge_alerts, online),
         })
     return result
+
+
+def _alert_dict(alert, sensor):
+    data = alert_service.alert_to_dict(alert)
+    # Czujnik po -127 znow odpowiada: awaria zamknie sie po SENSOR_RECOVERY_S poprawnych odczytow
+    if (
+        alert.kind == KIND_SENSOR_ERROR and alert.ended_at is None and sensor is not None
+        and sensor.last_error_at is not None and sensor.last_ts is not None and sensor.last_ts > sensor.last_error_at
+    ):
+        data["recovers_at"] = sensor.last_error_at + current_app.config["SENSOR_RECOVERY_S"]
+    return data
 
 
 def choose_bucket(span):

@@ -17,6 +17,8 @@ class Sensor(db.Model):
     last_temp = db.Column(db.Float, nullable=True)
     # Epoch UTC odebrania ostatniego pomiaru przez backend
     last_seen_at = db.Column(db.BigInteger, nullable=True)
+    # ts ostatniego swiezego -127 - awaria zamyka sie po SENSOR_RECOVERY_S poprawnych odczytow
+    last_error_at = db.Column(db.BigInteger, nullable=True)
 
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 

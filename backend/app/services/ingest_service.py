@@ -40,7 +40,8 @@ class IngestResult:
 def _get_or_create_board(board_id):
     board = db.session.get(Board, board_id)
     if board is None:
-        board = Board(id=board_id)
+        # is_active jawnie - default kolumny ustawia sie dopiero przy zapisie, a sprawdzamy je od razu
+        board = Board(id=board_id, is_active=True)
         db.session.add(board)
         logger.info(f"Nowa płytka: {board_id}")
     return board
@@ -140,6 +141,10 @@ def ingest_data(board_id, payload):
     result = IngestResult(received=len(readings))
     board = _get_or_create_board(board_id)
     board.last_seen_at = now
+    if not board.is_active:
+        # Wylaczona plytka: tylko "odezwala sie" (admin widzi, ze nadal jest zasilana), dane pomijane
+        logger.info(f"{board_id}: płytka wyłączona - pomijam {len(readings)} odczytów")
+        return result
 
     parsed = []
     for reading in readings:
@@ -184,7 +189,14 @@ def ingest_data(board_id, payload):
 
     alert_service.board_seen(board_id, now)
 
+    # -127 najpierw: znacznik ostatniego bledu decyduje, czy kolejny poprawny odczyt zamyka awarie
+    for sid, ts in result.sensor_errors:
+        sensor = sensors[sid]
+        if now - ts <= fresh_s and (sensor.last_ts is None or ts > sensor.last_ts):
+            sensor.last_error_at = max(ts, sensor.last_error_at or 0)
+
     # Stan czujnika i alarmy tylko z najnowszego pomiaru - stary pomiar z bufora nie zmienia biezacego stanu
+    recovery_s = current_app.config["SENSOR_RECOVERY_S"]
     newest = {}
     for sensor_id, fridge_id, ts, temp in result.inserted:
         if sensor_id not in newest or ts > newest[sensor_id][1]:
@@ -197,7 +209,9 @@ def ingest_data(board_id, payload):
         sensor.last_temp = temp
         sensor.present = True
         if fridge_id is not None and now - ts <= fresh_s:
-            alert_service.close_fault(fridge_id, KIND_SENSOR_ERROR, now)
+            # Migajacy czujnik (-127 na przemian z odczytem) = jedna awaria, nie seria AWARIA/OK
+            if sensor.last_error_at is None or ts - sensor.last_error_at >= recovery_s:
+                alert_service.close_fault(fridge_id, KIND_SENSOR_ERROR, now)
             alert_service.close_fault(fridge_id, KIND_SENSOR_MISSING, now)
             alert_service.evaluate_temperature(fridge_id, temp, ts, now)
 
@@ -227,6 +241,11 @@ def ingest_status(board_id, payload, retained=False):
 
     now = now_ts()
     board = _get_or_create_board(board_id)
+    if not board.is_active:
+        if not retained:
+            board.last_seen_at = now
+        logger.info(f"{board_id}: płytka wyłączona - pomijam status")
+        return False
     status_ts, ts_from_server = _parse_ts(payload.get("ts"), now)
     if board.last_status_at is not None and status_ts < board.last_status_at:
         logger.info(f"{board_id}: starszy status ({status_ts}) niż zapisany - pomijam")

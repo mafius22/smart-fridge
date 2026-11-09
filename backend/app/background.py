@@ -28,12 +28,13 @@ def _offline_job(app):
             return
         try:
             alert_service.check_offline(now)
+            alert_service.send_outage_summaries(now)
             db.session.commit()
             push_service.send_pending()
         except Exception as e:
             db.session.rollback()
             push_service.discard_pending()
-            logger.error(f"Błąd sprawdzania offline: {e}")
+            logger.error(f"Błąd zadania okresowego (offline / podsumowanie przerwy): {e}")
 
 
 def start_background(app):

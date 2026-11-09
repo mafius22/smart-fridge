@@ -1,3 +1,5 @@
+import logging
+
 from flask import current_app, jsonify, request
 from flask_jwt_extended import current_user
 
@@ -5,13 +7,15 @@ from app.api_utils import ApiError, get_bool, get_json, get_str, not_found
 from app.auth import admin_required
 from app.extensions import db
 from app.models import Alert, Board, Fridge, Measurement, Sensor, SensorAssignment, User, UserFridge
-from app.models.alert import KIND_OFFLINE
-from app.models.user import ROLE_ADMIN, ROLES
+from app.models.alert import END_ACCESS, END_BOARD, END_FRIDGE, END_SENSOR, END_USER, TEMPERATURE_KINDS
+from app.models.user import ROLE_ADMIN, ROLE_USER, ROLES
 from app.routes.auth import user_to_dict
 from app.services import alert_service, fridge_service
 from app.services.user_service import create_user, validate_password
 from app.utils import now_ts
 from . import api_bp
+
+logger = logging.getLogger(__name__)
 
 
 def _get_or_404(model, key, what):
@@ -70,6 +74,11 @@ def admin_update_user(user_id):
             raise ApiError("Nieznana rola", 400, "validation")
         if is_self and data["role"] != user.role:
             raise ApiError("Nie możesz zmienić własnej roli", 400, "self_action")
+        if user.is_admin and data["role"] == ROLE_USER:
+            # Admin mial dostep z roli; jego wiersze ustawien nie moga po degradacji stac sie dostepem
+            alert_service.close_alerts(now_ts(), END_ACCESS, user_id=user.id)
+            for link in list(user.fridge_links):
+                db.session.delete(link)
         user.role = data["role"]
     if "is_active" in data:
         is_active = get_bool(data, "is_active")
@@ -77,6 +86,7 @@ def admin_update_user(user_id):
             raise ApiError("Nie możesz zablokować własnego konta", 400, "self_action")
         if user.is_active and not is_active:
             user.token_version += 1  # natychmiastowe wylogowanie
+            alert_service.close_alerts(now_ts(), END_USER, user_id=user.id, kinds=TEMPERATURE_KINDS)
         user.is_active = is_active
     db.session.commit()
     return jsonify({"user": _admin_user_dict(user)})
@@ -128,7 +138,7 @@ def admin_set_user_fridges(user_id):
     current = {link.fridge_id: link for link in user.fridge_links}
     for fridge_id, link in current.items():
         if fridge_id not in wanted:
-            alert_service.close_user_alerts(user.id, fridge_id, now)
+            alert_service.close_alerts(now, END_ACCESS, fridge_id=fridge_id, user_id=user.id)
             db.session.delete(link)
     for fridge_id in wanted - set(current):
         db.session.add(UserFridge(user_id=user.id, fridge_id=fridge_id))
@@ -178,7 +188,11 @@ def admin_update_fridge(fridge_id):
     if "location" in data:
         fridge.location = get_str(data, "location", 100, allow_none=True)
     if "is_active" in data:
-        fridge.is_active = get_bool(data, "is_active")
+        is_active = get_bool(data, "is_active")
+        if fridge.is_active and not is_active:
+            # Wylaczona lodowka nie jest monitorowana - alarmy nie moga wisiec do ponownego wlaczenia
+            alert_service.close_alerts(now_ts(), END_FRIDGE, fridge_id=fridge.id)
+        fridge.is_active = is_active
     db.session.commit()
     return jsonify({"fridge": fridge_service.fridge_summaries(current_user, [fridge])[0]})
 
@@ -186,14 +200,27 @@ def admin_update_fridge(fridge_id):
 @api_bp.route("/admin/fridges/<int:fridge_id>", methods=["DELETE"])
 @admin_required
 def admin_delete_fridge(fridge_id):
+    """
+    Bez historii: od razu. Z historia: tylko ?force=1 i {"confirm_name": "<nazwa lodowki>"} -
+    usuwa na stale pomiary, alarmy, przypisania czujnikow i dostepy z ustawieniami uzytkownikow.
+    """
     fridge = _get_or_404(Fridge, fridge_id, "lodówka")
-    if db.session.query(Measurement.id).filter_by(fridge_id=fridge.id).first():
-        raise ApiError("Lodówka ma historię pomiarów - zamiast usuwać, dezaktywuj ją", 409, "has_history")
-    Alert.query.filter_by(fridge_id=fridge.id).delete()
-    SensorAssignment.query.filter_by(fridge_id=fridge.id).delete()
+    count = db.session.query(db.func.count(Measurement.id)).filter(Measurement.fridge_id == fridge.id).scalar()
+    if count:
+        if request.args.get("force") != "1":
+            raise ApiError(
+                f"Lodówka ma historię ({count} pomiarów). Wyłącz ją albo usuń na stałe razem z historią.",
+                409, "has_history",
+            )
+        if get_json().get("confirm_name") != fridge.name:
+            raise ApiError("Wpisana nazwa nie zgadza się z nazwą lodówki", 400, "confirm_mismatch")
+        Measurement.query.filter_by(fridge_id=fridge.id).delete(synchronize_session=False)
+    Alert.query.filter_by(fridge_id=fridge.id).delete(synchronize_session=False)
+    SensorAssignment.query.filter_by(fridge_id=fridge.id).delete(synchronize_session=False)
     db.session.delete(fridge)
     db.session.commit()
-    return jsonify({"message": "Usunięto lodówkę"})
+    logger.warning(f"Usunięto lodówkę {fridge_id} „{fridge.name}” z {count} pomiarami (admin {current_user.email})")
+    return jsonify({"message": f"Usunięto lodówkę i {count} pomiarów" if count else "Usunięto lodówkę"})
 
 
 def _close_active_assignments(now, fridge_id=None, sensor_id=None):
@@ -205,7 +232,8 @@ def _close_active_assignments(now, fridge_id=None, sensor_id=None):
     closed = query.all()
     for assignment in closed:
         assignment.valid_to = now
-        alert_service.close_fridge_faults(assignment.fridge_id, now)
+        # Wszystkie alarmy lodowki dotyczyly starej sondy (temperatury, -127, brak sondy, offline jej plytki)
+        alert_service.close_alerts(now, END_SENSOR, fridge_id=assignment.fridge_id)
     return closed
 
 
@@ -231,7 +259,6 @@ def admin_unassign_sensor(fridge_id):
     fridge = _get_or_404(Fridge, fridge_id, "lodówka")
     now = now_ts()
     _close_active_assignments(now, fridge_id=fridge.id)
-    alert_service.close_fault(fridge.id, KIND_OFFLINE, now, notify=False)
     db.session.commit()
     return jsonify({"fridge": fridge_service.fridge_summaries(current_user, [fridge])[0]})
 
@@ -242,6 +269,7 @@ def _board_dict(board, now, assigned):
     return {
         "id": board.id,
         "name": board.name,
+        "is_active": board.is_active,
         "fw": board.fw,
         "rssi": board.rssi,
         "buffered": board.buffered,
@@ -294,8 +322,69 @@ def admin_update_board(board_id):
     data = get_json()
     if "name" in data:
         board.name = get_str(data, "name", 100, allow_none=True)
+    if "is_active" in data:
+        is_active = get_bool(data, "is_active")
+        if board.is_active and not is_active:
+            # Dane plytki nie beda przyjmowane - alarmy jej lodowek nie moga wisiec
+            now = now_ts()
+            for fridge_id in alert_service.fridges_of_board(board.id):
+                alert_service.close_alerts(now, END_BOARD, fridge_id=fridge_id)
+        board.is_active = is_active
     db.session.commit()
     return jsonify({"board": _board_dict(board, now_ts(), _assigned_fridges())})
+
+
+def _check_sensor_deletable(sensor):
+    if SensorAssignment.query.filter_by(sensor_id=sensor.id, valid_to=None).first():
+        raise ApiError(f"Czujnik {sensor.id} jest przypięty do lodówki - najpierw go odepnij", 409, "assigned")
+    if SensorAssignment.query.filter_by(sensor_id=sensor.id).first():
+        raise ApiError(
+            f"Pomiary czujnika {sensor.id} są w historii lodówki - usuń najpierw tę lodówkę albo zostaw czujnik",
+            409, "has_history",
+        )
+
+
+def _delete_sensor(sensor):
+    """Pomiary bez lodowki (sprzed przypiecia) + czujnik. Wywolywac po _check_sensor_deletable."""
+    count = Measurement.query.filter_by(sensor_id=sensor.id).delete(synchronize_session=False)
+    db.session.delete(sensor)
+    return count
+
+
+@api_bp.route("/admin/sensors/<sensor_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_sensor(sensor_id):
+    """Tylko czujnik nigdy nieprzypiety do lodowki. Wciaz podlaczony pojawi sie ponownie przy kolejnym pomiarze."""
+    sensor = _get_or_404(Sensor, sensor_id.lower(), "czujnik")
+    _check_sensor_deletable(sensor)
+    count = _delete_sensor(sensor)
+    db.session.commit()
+    logger.warning(f"Usunięto czujnik {sensor_id} i {count} pomiarów (admin {current_user.email})")
+    return jsonify({"message": "Usunięto czujnik. Jeśli nadal jest podłączony, pojawi się ponownie po pomiarze."})
+
+
+@api_bp.route("/admin/boards/<board_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_board(board_id):
+    """
+    Plytka z czujnikami (zadnego nie przypinano do lodowki). Wlaczona plytka pojawi sie ponownie -
+    na stale odcina ja "Wylacz". Wiadomosci retained plytki na brokerze sa czyszczone.
+    """
+    board = _get_or_404(Board, board_id, "płytka")
+    sensors = list(board.sensors)
+    for sensor in sensors:
+        _check_sensor_deletable(sensor)
+    count = sum(_delete_sensor(sensor) for sensor in sensors)
+    db.session.delete(board)
+    db.session.commit()
+
+    mqtt_client = current_app.extensions.get("mqtt")
+    cleared = mqtt_client is not None and mqtt_client.clear_retained(board_id)
+    logger.warning(f"Usunięto płytkę {board_id}, {len(sensors)} czujników, {count} pomiarów (admin {current_user.email})")
+    message = "Usunięto płytkę. Jeśli nadal jest włączona, pojawi się ponownie - aby ją odciąć, użyj „Wyłącz”."
+    if not cleared:
+        message += " Brak połączenia z brokerem - zapamiętany status płytki zostanie na brokerze."
+    return jsonify({"message": message})
 
 
 @api_bp.route("/admin/sensors", methods=["GET"])

@@ -22,6 +22,8 @@ class User(db.Model):
     must_change_password = db.Column(db.Boolean, nullable=False, default=True)
     # Glowny wylacznik push dla konta (alarmy i tak zapisuja sie w bazie)
     notifications_enabled = db.Column(db.Boolean, nullable=False, default=True)
+    # Historia alarmow: pokazywac tez przekroczenia krotsze niz opoznienie (zamkniete bez powiadomienia)
+    show_short_alerts = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     # Zmiana hasla / dezaktywacja podbija wersje - stare tokeny przestaja dzialac
     token_version = db.Column(db.Integer, nullable=False, default=0)
 

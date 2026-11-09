@@ -8,6 +8,8 @@ class Board(db.Model):
 
     id = db.Column(db.String(20), primary_key=True)
     name = db.Column(db.String(100), nullable=True)
+    # Wylaczona: backend nie zapisuje jej danych i nie alarmuje (plytka nie odtwarza sie sama jak po usunieciu)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, server_default=db.true())
 
     # Pola z ostatniego statusu
     fw = db.Column(db.String(32), nullable=True)

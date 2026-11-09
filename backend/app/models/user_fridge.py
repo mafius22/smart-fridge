@@ -38,6 +38,8 @@ class UserFridge(db.Model):
     notify_low = db.Column(db.Boolean, nullable=False, default=True)
     notify_high = db.Column(db.Boolean, nullable=False, default=True)
     notify_fault = db.Column(db.Boolean, nullable=False, default=True)
+    # Powiadomienie o temperaturze dopiero, gdy przekroczenie trwa tyle minut (odszranianie, otwarte drzwi); 0 = od razu
+    alert_delay_min = db.Column(db.Integer, nullable=False, default=0, server_default="0")
 
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
