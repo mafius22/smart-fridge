@@ -1,58 +1,42 @@
-// 1. Obsługa otrzymywania powiadomień Push
+// Powiadomienia push z backendu: {title, body, url, tag}
 
 self.addEventListener('push', (event) => {
-  console.log('[Service Worker] Otrzymano Pusha!');
-
-  let data = { 
-    title: 'Smart Fridge', 
-    body: 'Masz nową wiadomość!',
-    url: '/' 
-  };
+  let data = { title: 'Smart Fridge', body: 'Nowe powiadomienie', url: '/' };
 
   if (event.data) {
     try {
-      const jsonPayload = event.data.json();
-      data = { ...data, ...jsonPayload };
-    } catch (e) {
+      data = { ...data, ...event.data.json() };
+    } catch {
       data.body = event.data.text();
     }
   }
 
   const options = {
     body: data.body,
-    icon: '/icon-192.png', 
-    badge: '/icon-192.png',
+    icon: '/icon-192x192.png',
+    badge: '/icon-192x192.png',
     vibrate: [100, 50, 100],
-    data: {
-      url: data.url,
-      dateOfArrival: Date.now()
-    },
-    tag: 'smart-fridge-notification', 
-    renotify: true
+    data: { url: data.url || '/', dateOfArrival: Date.now() },
+    // Ten sam tag (lodowka + rodzaj alarmu): "OK" zastepuje wczesniejszy "ALARM" zamiast dokladac kolejne
+    tag: data.tag || 'smart-fridge',
+    renotify: true,
   };
 
-  event.waitUntil(
-    self.registration.showNotification(data.title, options)
-  );
+  event.waitUntil(self.registration.showNotification(data.title, options));
 });
 
 self.addEventListener('notificationclick', (event) => {
-  const notification = event.notification;
-  const targetUrl = notification.data.url || '/';
-
-  notification.close(); 
+  const targetUrl = new URL(event.notification.data?.url || '/', self.location.origin).href;
+  event.notification.close();
 
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true })
-      .then((windowClients) => {
-        for (let client of windowClients) {
-          if (client.url.includes(targetUrl) && 'focus' in client) {
-            return client.focus();
-          }
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if ('focus' in client && 'navigate' in client) {
+          return client.navigate(targetUrl).then((c) => (c || client).focus());
         }
-        if (clients.openWindow) {
-          return clients.openWindow(targetUrl);
-        }
-      })
+      }
+      return self.clients.openWindow ? self.clients.openWindow(targetUrl) : undefined;
+    }),
   );
 });
