@@ -4,10 +4,10 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    allowedHosts: [
-      'wet-donuts-tell.loca.lt'// konkretny host
-    ],
-    // LUB jeśli chcesz mieć spokój przy zmianach adresu ngrok:
-    // allowedHosts: 'all' 
+    // /api przez Vite -> backend: ta sama domena, wiec ciasteczka sesji dzialaja tez przez jeden tunel (ngrok)
+    proxy: {
+      '/api': 'http://localhost:5000',
+    },
+    allowedHosts: ['.ngrok-free.dev', '.ngrok-free.app', '.loca.lt'],
   }
 })
