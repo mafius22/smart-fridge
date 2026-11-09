@@ -240,6 +240,8 @@ def test_offline_detection(app, fridge, pushes):
     alert_service.check_offline(now)
     db.session.commit()
     assert Alert.query.filter_by(kind="offline", ended_at=None).count() == 1
+    # Poczatek awarii = ostatnia wiadomosc plytki, nie chwila wykrycia
+    assert Alert.query.filter_by(kind="offline", ended_at=None).one().started_at == now - 1000
 
     alert_service.check_offline(now + 60)     # bez ponownego alarmu
     db.session.commit()

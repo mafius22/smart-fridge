@@ -187,14 +187,15 @@ def _fault_recipients(fridge):
     return result
 
 
-def open_fault(fridge_id, kind, now, detail=None):
+def open_fault(fridge_id, kind, now, detail=None, started_at=None):
+    """started_at: kiedy awaria faktycznie sie zaczela (offline = ostatnia wiadomosc plytki), domyslnie teraz."""
     if _active(fridge_id, kind) is not None:
         return False
     fridge = db.session.get(Fridge, fridge_id)
     # Wylaczona lodowka nie jest monitorowana
     if fridge is None or not fridge.is_active:
         return False
-    db.session.add(Alert(fridge_id=fridge_id, user_id=None, kind=kind, started_at=now, notified_at=now))
+    db.session.add(Alert(fridge_id=fridge_id, user_id=None, kind=kind, started_at=started_at or now, notified_at=now))
     body = FAULT_TEXT[kind][0] + (f" ({detail})" if detail else "")
     for user, prefs in _fault_recipients(fridge):
         _notify(user, fridge, prefs, "AWARIA", body, kind)
@@ -252,7 +253,8 @@ def check_offline(now):
         if silent <= factor * (board.interval_s or default_interval):
             continue
         for fridge_id in fridges_of_board(board.id):
-            open_fault(fridge_id, KIND_OFFLINE, now, detail=f"od {_fmt_duration(silent)}")
+            # Poczatek = ostatnia wiadomosc plytki, nie chwila wykrycia (np. po restarcie backendu lub wlaczeniu plytki)
+            open_fault(fridge_id, KIND_OFFLINE, now, detail=f"od {_fmt_duration(silent)}", started_at=board.last_seen_at)
 
 
 # ---------- Podsumowanie przerwy w lacznosci ----------
