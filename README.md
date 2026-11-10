@@ -30,6 +30,7 @@ Ensuring continuous monitoring of product storage conditions in catering and ret
 ### `/frontend`
 * **Language:** JS
 * **Framework:** React + Vite
+* **UI:** Tailwind CSS 4 + shadcn/ui (Radix), light/dark theme
 * **HTTP Client:** Axios
 * **Service Worker:** Background notification and PWA support
 
