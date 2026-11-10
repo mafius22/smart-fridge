@@ -17,7 +17,7 @@ def get_accessible_fridge(user, fridge_id):
     """Lodowka albo 404 - cudza lodowka wyglada tak samo jak nieistniejaca."""
     fridge = accessible_fridges_query(user).filter(Fridge.id == fridge_id).first()
     if fridge is None:
-        raise not_found("Nie znaleziono lodówki")
+        raise not_found("Nie znaleziono strefy")
     return fridge
 
 

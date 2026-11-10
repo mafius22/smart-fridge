@@ -52,12 +52,12 @@ def test_prefs_alias_and_folder(app, client, admin, user):
 
     resp = client.patch(
         f"/api/fridges/{a.id}/prefs",
-        json={"custom_name": "Moja lodówka", "folder_id": folder["id"], "min_temp": 2, "max_temp": 8},
+        json={"custom_name": "Moja strefa", "folder_id": folder["id"], "min_temp": 2, "max_temp": 8},
         headers=csrf(client),
     )
     assert resp.status_code == 200
     data = resp.get_json()["fridge"]
-    assert data["display_name"] == "Moja lodówka"
+    assert data["display_name"] == "Moja strefa"
     assert data["folder_id"] == folder["id"]
     assert data["settings"]["max_temp"] == 8
 

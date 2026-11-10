@@ -120,7 +120,7 @@ def _evaluate_one(fridge, prefs, user, kind, temp, ts, now, delay_s, enabled, th
             return
         active = Alert(fridge_id=fridge.id, user_id=user.id, kind=kind, value=temp, threshold=threshold, started_at=ts)
         db.session.add(active)
-        logger.info(f"Przekroczenie {kind}: lodówka {fridge.id}, user {user.id}, {temp} °C")
+        logger.info(f"Przekroczenie {kind}: strefa {fridge.id}, user {user.id}, {temp} °C")
     elif not enabled:
         active.ended_at = ts
         active.end_reason = END_PREFS
@@ -141,7 +141,7 @@ def _evaluate_one(fridge, prefs, user, kind, temp, ts, now, delay_s, enabled, th
         if delay_s:
             body += f" od {_fmt_duration(ts - active.started_at)}"
         _notify(user, fridge, prefs, "ALARM", body, kind)
-        logger.info(f"ALARM {kind}: lodówka {fridge.id}, user {user.id}, {temp} °C")
+        logger.info(f"ALARM {kind}: strefa {fridge.id}, user {user.id}, {temp} °C")
 
 
 def evaluate_user_now(prefs, user, now):
@@ -199,7 +199,7 @@ def open_fault(fridge_id, kind, now, detail=None, started_at=None):
     body = FAULT_TEXT[kind][0] + (f" ({detail})" if detail else "")
     for user, prefs in _fault_recipients(fridge):
         _notify(user, fridge, prefs, "AWARIA", body, kind)
-    logger.warning(f"AWARIA {kind}: lodówka {fridge_id} {detail or ''}")
+    logger.warning(f"AWARIA {kind}: strefa {fridge_id} {detail or ''}")
     return True
 
 
@@ -215,7 +215,7 @@ def close_fault(fridge_id, kind, now):
         body = f"{FAULT_TEXT[kind][1]} (przerwa {_fmt_duration(now - active.started_at)})"
         for user, prefs in _fault_recipients(fridge):
             _notify(user, fridge, prefs, "OK", body, kind)
-    logger.info(f"Koniec awarii {kind}: lodówka {fridge_id}")
+    logger.info(f"Koniec awarii {kind}: strefa {fridge_id}")
     return True
 
 
@@ -320,7 +320,7 @@ def _summarize_outage(outage, now):
                 f"({'max' if kind == KIND_HIGH else 'min'} {worst:.1f} °C, {len(breaches)} z {len(readings)} pomiarów)"
             )
             _notify(user, fridge, prefs, "W CZASIE PRZERWY", body, kind)
-            logger.info(f"Podsumowanie przerwy {kind}: lodówka {fridge.id}, user {user.id}, {worst} °C")
+            logger.info(f"Podsumowanie przerwy {kind}: strefa {fridge.id}, user {user.id}, {worst} °C")
 
 
 # ---------- Dla API ----------

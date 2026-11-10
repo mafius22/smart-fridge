@@ -125,14 +125,14 @@ def admin_set_user_fridges(user_id):
     """Pelna lista lodowek, do ktorych uzytkownik ma dostep: {"fridge_ids": [1, 2]}."""
     user = _get_or_404(User, user_id, "użytkownik")
     if user.is_admin:
-        raise ApiError("Admin ma dostęp do wszystkich lodówek", 400, "validation")
+        raise ApiError("Admin ma dostęp do wszystkich stref", 400, "validation")
     fridge_ids = get_json().get("fridge_ids")
     if not isinstance(fridge_ids, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in fridge_ids):
         raise ApiError("Pole fridge_ids musi być listą liczb", 400, "validation")
     wanted = set(fridge_ids)
     existing = {f.id for f in Fridge.query.filter(Fridge.id.in_(wanted)).all()} if wanted else set()
     if existing != wanted:
-        raise not_found(f"Nie znaleziono lodówek: {sorted(wanted - existing)}")
+        raise not_found(f"Nie znaleziono stref: {sorted(wanted - existing)}")
 
     now = now_ts()
     current = {link.fridge_id: link for link in user.fridge_links}
@@ -181,7 +181,7 @@ def admin_create_fridge():
 @api_bp.route("/admin/fridges/<int:fridge_id>", methods=["PATCH"])
 @admin_required
 def admin_update_fridge(fridge_id):
-    fridge = _get_or_404(Fridge, fridge_id, "lodówka")
+    fridge = _get_or_404(Fridge, fridge_id, "strefa")
     data = get_json()
     if "name" in data:
         fridge.name = get_str(data, "name", 100, required=True)
@@ -204,23 +204,23 @@ def admin_delete_fridge(fridge_id):
     Bez historii: od razu. Z historia: tylko ?force=1 i {"confirm_name": "<nazwa lodowki>"} -
     usuwa na stale pomiary, alarmy, przypisania czujnikow i dostepy z ustawieniami uzytkownikow.
     """
-    fridge = _get_or_404(Fridge, fridge_id, "lodówka")
+    fridge = _get_or_404(Fridge, fridge_id, "strefa")
     count = db.session.query(db.func.count(Measurement.id)).filter(Measurement.fridge_id == fridge.id).scalar()
     if count:
         if request.args.get("force") != "1":
             raise ApiError(
-                f"Lodówka ma historię ({count} pomiarów). Wyłącz ją albo usuń na stałe razem z historią.",
+                f"Strefa ma historię ({count} pomiarów). Wyłącz ją albo usuń na stałe razem z historią.",
                 409, "has_history",
             )
         if get_json().get("confirm_name") != fridge.name:
-            raise ApiError("Wpisana nazwa nie zgadza się z nazwą lodówki", 400, "confirm_mismatch")
+            raise ApiError("Wpisana nazwa nie zgadza się z nazwą strefy", 400, "confirm_mismatch")
         Measurement.query.filter_by(fridge_id=fridge.id).delete(synchronize_session=False)
     Alert.query.filter_by(fridge_id=fridge.id).delete(synchronize_session=False)
     SensorAssignment.query.filter_by(fridge_id=fridge.id).delete(synchronize_session=False)
     db.session.delete(fridge)
     db.session.commit()
-    logger.warning(f"Usunięto lodówkę {fridge_id} „{fridge.name}” z {count} pomiarami (admin {current_user.email})")
-    return jsonify({"message": f"Usunięto lodówkę i {count} pomiarów" if count else "Usunięto lodówkę"})
+    logger.warning(f"Usunięto strefę {fridge_id} „{fridge.name}” z {count} pomiarami (admin {current_user.email})")
+    return jsonify({"message": f"Usunięto strefę i {count} pomiarów" if count else "Usunięto strefę"})
 
 
 def _close_active_assignments(now, fridge_id=None, sensor_id=None):
@@ -241,7 +241,7 @@ def _close_active_assignments(now, fridge_id=None, sensor_id=None):
 @admin_required
 def admin_assign_sensor(fridge_id):
     """Przypina czujnik do lodowki od teraz; poprzednie przypisania czujnika i lodowki sie koncza."""
-    fridge = _get_or_404(Fridge, fridge_id, "lodówka")
+    fridge = _get_or_404(Fridge, fridge_id, "strefa")
     sensor_id = get_str(get_json(), "sensor_id", 16, required=True).lower()
     sensor = _get_or_404(Sensor, sensor_id, "czujnik")
 
@@ -256,7 +256,7 @@ def admin_assign_sensor(fridge_id):
 @api_bp.route("/admin/fridges/<int:fridge_id>/unassign", methods=["POST"])
 @admin_required
 def admin_unassign_sensor(fridge_id):
-    fridge = _get_or_404(Fridge, fridge_id, "lodówka")
+    fridge = _get_or_404(Fridge, fridge_id, "strefa")
     now = now_ts()
     _close_active_assignments(now, fridge_id=fridge.id)
     db.session.commit()
@@ -336,10 +336,10 @@ def admin_update_board(board_id):
 
 def _check_sensor_deletable(sensor):
     if SensorAssignment.query.filter_by(sensor_id=sensor.id, valid_to=None).first():
-        raise ApiError(f"Czujnik {sensor.id} jest przypięty do lodówki - najpierw go odepnij", 409, "assigned")
+        raise ApiError(f"Czujnik {sensor.id} jest przypięty do strefy - najpierw go odepnij", 409, "assigned")
     if SensorAssignment.query.filter_by(sensor_id=sensor.id).first():
         raise ApiError(
-            f"Pomiary czujnika {sensor.id} są w historii lodówki - usuń najpierw tę lodówkę albo zostaw czujnik",
+            f"Pomiary czujnika {sensor.id} są w historii strefy - usuń najpierw tę strefę albo zostaw czujnik",
             409, "has_history",
         )
 
