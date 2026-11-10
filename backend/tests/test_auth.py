@@ -77,3 +77,11 @@ def test_admin_cannot_block_self(client, admin):
     login(client, "admin@test.pl")
     resp = client.patch(f"/api/admin/users/{admin.id}", json={"is_active": False}, headers=csrf(client))
     assert resp.status_code == 400
+
+
+def test_session_cookies_survive_browser_restart(client, admin):
+    # Ciasteczka z data waznosci - zamkniecie przegladarki / restart telefonu nie wylogowuje
+    resp = login(client, "admin@test.pl")
+    cookies = {c.split("=", 1)[0]: c for c in resp.headers.getlist("Set-Cookie")}
+    for name in ("access_token_cookie", "refresh_token_cookie", "csrf_refresh_token"):
+        assert "Expires=" in cookies[name] or "Max-Age=" in cookies[name], name

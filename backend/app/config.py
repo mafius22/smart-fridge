@@ -33,6 +33,8 @@ class Config:
     JWT_COOKIE_SAMESITE = "Lax"
     # Na produkcji (HTTPS) ustawic JWT_COOKIE_SECURE=1
     JWT_COOKIE_SECURE = os.getenv("JWT_COOKIE_SECURE", "0") == "1"
+    # Ciasteczka z data waznosci (nie sesyjne): logowanie przetrwa zamkniecie przegladarki i restart telefonu (PWA)
+    JWT_SESSION_COOKIE = False
     JWT_ACCESS_COOKIE_PATH = "/api/"
     JWT_REFRESH_COOKIE_PATH = "/api/auth/"
 
