@@ -1,61 +1,56 @@
-import { useNavigate } from 'react-router-dom';
-import { Thermometer, AlertTriangle, WifiOff } from 'lucide-react';
-import StateBadge from './StateBadge';
-import { ALERT_LABELS, formatTemp, thresholdsLabel, timeAgo } from '../utils/format';
+import { Link } from 'react-router-dom';
+import { Clock, Gauge } from 'lucide-react';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
+import StateBadge from '@/components/StateBadge';
+import { ALERT_LABELS, formatTemp, thresholdsLabel, timeAgo } from '@/utils/format';
+import { STATE_TONE, TONE_ACCENT, TONE_BADGE, alertTone } from '@/utils/status';
 
-export default function FridgeCard({ fridge, folders, onMove }) {
-  const navigate = useNavigate();
-  const Icon = fridge.state === 'offline' ? WifiOff : (fridge.state === 'ok' || fridge.state === 'no_data' ? Thermometer : AlertTriangle);
+export default function FridgeCard({ fridge }) {
+  const tone = STATE_TONE[fridge.state] || 'muted';
+  // Offline widac juz w odznace stanu - etykiety tylko dla alarmow, ktore cos dodaja (rodzaj alarmu, awarii)
+  const chips = fridge.alerts.filter((a) => a.kind !== 'offline');
 
   return (
-    <div
-      className={`card fridge-card state-${fridge.state}`}
-      onClick={() => navigate(`/fridges/${fridge.id}`)}
-      role="link"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/fridges/${fridge.id}`); }}
-    >
-      <div className="fridge-card-head">
-        <div className="fridge-icon"><Icon size={18} /></div>
-        <div className="fridge-title">
-          <h3>{fridge.display_name}</h3>
-          {fridge.location && <span className="muted small">{fridge.location}</span>}
+    <Card size="sm" className="relative gap-2 pl-1 transition-shadow hover:shadow-md has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring/50">
+      {/* Pasek koloru stanu */}
+      <span className={cn('absolute inset-y-0 left-0 w-1', TONE_ACCENT[tone])} aria-hidden />
+
+      <div className="flex items-start justify-between gap-2 px-3">
+        <div className="min-w-0">
+          {/* Rozciagniety link: cala karta jest klikalna */}
+          <Link
+            to={`/fridges/${fridge.id}`}
+            className="block truncate text-sm font-semibold outline-none after:absolute after:inset-0 after:content-['']"
+          >
+            {fridge.display_name}
+          </Link>
+          {fridge.location && <p className="truncate text-xs text-muted-foreground">{fridge.location}</p>}
         </div>
         <StateBadge state={fridge.state} />
       </div>
 
-      <div className="fridge-temp">
-        {formatTemp(fridge.last_temp)}<span className="unit">°C</span>
+      <div className="px-3">
+        <div className={cn('tabular text-3xl font-semibold tracking-tight', fridge.last_temp == null && 'text-muted-foreground')}>
+          {formatTemp(fridge.last_temp)}
+          <span className="ml-0.5 align-top text-base font-normal text-muted-foreground">°C</span>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1"><Clock className="size-3" />{timeAgo(fridge.last_ts)}</span>
+          <span className="flex items-center gap-1"><Gauge className="size-3" />{thresholdsLabel(fridge.settings)}</span>
+        </div>
       </div>
 
-      <div className="fridge-meta">
-        <span>{timeAgo(fridge.last_ts)}</span>
-        <span>{thresholdsLabel(fridge.settings)}</span>
-      </div>
-
-      {fridge.alerts.length > 0 && (
-        <ul className="alert-chips">
-          {fridge.alerts.map((a) => (
-            <li key={a.id} className={`chip ${a.is_fault ? 'chip-fault' : a.pending ? 'chip-pending' : 'chip-alarm'}`}>
+      {chips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-3">
+          {chips.map((a) => (
+            <Badge key={a.id} variant="secondary" className={cn('h-auto whitespace-normal', TONE_BADGE[alertTone(a)])}>
               {a.recovers_at ? 'Czujnik znów odpowiada' : ALERT_LABELS[a.kind]}
-            </li>
+            </Badge>
           ))}
-        </ul>
+        </div>
       )}
-
-      {onMove && (
-        <select
-          className="folder-select"
-          value={fridge.folder_id ?? ''}
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-          onChange={(e) => onMove(fridge, e.target.value === '' ? null : Number(e.target.value))}
-          aria-label="Folder"
-        >
-          <option value="">Bez folderu</option>
-          {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-        </select>
-      )}
-    </div>
+    </Card>
   );
 }

@@ -1,8 +1,14 @@
 import { useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard } from 'lucide-react';
-import { useAuth } from '../auth/AuthContext';
-import { apiError } from '../api/client';
+import { Loader2 } from 'lucide-react';
+import { apiError } from '@/api/client';
+import { useAuth } from '@/auth/AuthContext';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import AuthShell from '@/components/AuthShell';
+import Field from '@/components/Field';
+import FormMessage from '@/components/FormMessage';
 
 export default function LoginPage() {
   const { user, login } = useAuth();
@@ -31,22 +37,27 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="auth-page">
-      <form className="card auth-card" onSubmit={onSubmit}>
-        <div className="auth-brand"><LayoutDashboard size={28} /> Smart Fridge</div>
-        <h1>Logowanie</h1>
-        <label className="field">
-          <span>E-mail</span>
-          <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
-        </label>
-        <label className="field">
-          <span>Hasło</span>
-          <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-        </label>
-        {error && <div className="alert alert-error">{error}</div>}
-        <button className="btn btn-primary btn-block" disabled={busy}>{busy ? 'Logowanie…' : 'Zaloguj'}</button>
-        <p className="muted small">Konto zakłada administrator.</p>
-      </form>
-    </div>
+    <AuthShell>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-xl">Logowanie</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form className="grid gap-4" onSubmit={onSubmit}>
+            <Field label="E-mail">
+              <Input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
+            </Field>
+            <Field label="Hasło">
+              <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            </Field>
+            <FormMessage message={error ? { type: 'error', text: error } : null} />
+            <Button type="submit" size="lg" className="w-full" disabled={busy}>
+              {busy && <Loader2 className="animate-spin" />}
+              Zaloguj
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </AuthShell>
   );
 }

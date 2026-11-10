@@ -1,122 +1,208 @@
 import { useEffect, useState } from 'react';
-import { Bell, BellOff, Send } from 'lucide-react';
-import api, { apiError } from '../api/client';
-import { useAuth } from '../auth/AuthContext';
-import ChangePasswordForm from '../components/ChangePasswordForm';
-import { disablePush, enablePush, getBrowserSubscription, pushSupported } from '../utils/push';
+import { toast } from 'sonner';
+import {
+  Bell, BellOff, ChevronRight, History, KeyRound, Send, Smartphone, UserRound,
+} from 'lucide-react';
+import api, { apiError } from '@/api/client';
+import { useAuth } from '@/auth/AuthContext';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Separator } from '@/components/ui/separator';
+import ChangePasswordForm from '@/components/ChangePasswordForm';
+import Field from '@/components/Field';
+import PageHeader from '@/components/PageHeader';
+import StateBadge from '@/components/StateBadge';
+import SwitchRow from '@/components/SwitchRow';
+import { disablePush, enablePush, getBrowserSubscription, pushSupported } from '@/utils/push';
 
-export default function SettingsPage() {
-  const { user, setUser } = useAuth();
-  const [displayName, setDisplayName] = useState(user.display_name || '');
-  const [profileMsg, setProfileMsg] = useState(null);
-  const [browserPush, setBrowserPush] = useState(null); // null = sprawdzam
-  const [pushMsg, setPushMsg] = useState(null);
+function MenuItem({ icon: Icon, title, value, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
+    >
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <Icon className="size-4.5" />
+      </span>
+      <span className="grid min-w-0 flex-1">
+        <span className="text-sm font-medium">{title}</span>
+        {value && <span className="truncate text-xs text-muted-foreground">{value}</span>}
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+    </button>
+  );
+}
+
+function Panel({ open, onOpenChange, title, description, children }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90svh] gap-5 overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          {description && <DialogDescription>{description}</DialogDescription>}
+        </DialogHeader>
+        {children}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function NameForm({ user, onSave }) {
+  const [name, setName] = useState(user.display_name || '');
+  const unchanged = (name.trim() || null) === (user.display_name || null);
+  return (
+    <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); onSave(name.trim() || null); }}>
+      <Field label="Nazwa wyświetlana">
+        <Input value={name} maxLength={100} autoFocus onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <Button type="submit" disabled={unchanged}>Zapisz</Button>
+    </form>
+  );
+}
+
+function DevicePush() {
+  const [subscribed, setSubscribed] = useState(null); // null = sprawdzam
   const [busy, setBusy] = useState(false);
+  const supported = pushSupported();
 
-  useEffect(() => {
-    getBrowserSubscription().then((sub) => setBrowserPush(Boolean(sub))).catch(() => setBrowserPush(false));
-  }, []);
+  const refresh = () => getBrowserSubscription().then((sub) => setSubscribed(Boolean(sub))).catch(() => setSubscribed(false));
+  useEffect(() => { refresh(); }, []);
 
-  const saveProfile = async (patch) => {
-    try {
-      const res = await api.patch('/auth/me', patch);
-      setUser(res.data.user);
-      setProfileMsg({ type: 'success', text: 'Zapisano' });
-    } catch (err) {
-      setProfileMsg({ type: 'error', text: apiError(err) });
-    }
-  };
-
-  const runPush = async (fn, okText) => {
+  const run = async (fn, okText) => {
     setBusy(true);
-    setPushMsg(null);
     try {
       await fn();
-      setPushMsg({ type: 'success', text: okText });
+      toast.success(okText);
     } catch (err) {
-      setPushMsg({ type: 'error', text: apiError(err) });
+      toast.error(apiError(err));
     } finally {
       setBusy(false);
-      getBrowserSubscription().then((sub) => setBrowserPush(Boolean(sub))).catch(() => {});
+      refresh();
     }
   };
 
   return (
-    <div className="page narrow">
-      <h1>Ustawienia</h1>
-
-      <section className="card">
-        <h2>Profil</h2>
-        <form className="stack" onSubmit={(e) => { e.preventDefault(); saveProfile({ display_name: displayName.trim() || null }); }}>
-          <label className="field">
-            <span>E-mail (login)</span>
-            <input value={user.email} disabled />
-          </label>
-          <label className="field">
-            <span>Nazwa wyświetlana</span>
-            <input value={displayName} maxLength={100} placeholder={user.email} onChange={(e) => setDisplayName(e.target.value)} />
-          </label>
-          {profileMsg && <div className={`alert alert-${profileMsg.type}`}>{profileMsg.text}</div>}
-          <button className="btn btn-primary">Zapisz</button>
-        </form>
-      </section>
-
-      <section className="card">
-        <h2>Powiadomienia</h2>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={user.notifications_enabled}
-            onChange={(e) => saveProfile({ notifications_enabled: e.target.checked })}
-          />
-          Wysyłaj mi powiadomienia (wyłączenie wstrzymuje wszystkie, alarmy nadal są zapisywane)
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={Boolean(user.show_short_alerts)}
-            onChange={(e) => saveProfile({ show_short_alerts: e.target.checked })}
-          />
-          Pokazuj w historii alarmów krótkie przekroczenia (krótsze niż ustawione opóźnienie, bez powiadomienia)
-        </label>
-
-        <div className="push-box">
-          <div>
-            <strong>Ta przeglądarka / telefon</strong>
-            <div className="muted small">
-              {!pushSupported() && 'Przeglądarka nie obsługuje powiadomień push (na iPhone: dodaj aplikację do ekranu początkowego).'}
-              {pushSupported() && browserPush === null && 'Sprawdzam…'}
-              {pushSupported() && browserPush === true && 'Powiadomienia włączone na tym urządzeniu.'}
-              {pushSupported() && browserPush === false && 'Powiadomienia wyłączone na tym urządzeniu.'}
-            </div>
+    <div className="grid gap-3">
+      <div className="flex items-start gap-3">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted"><Smartphone className="size-4" /></span>
+        <div className="grid gap-1">
+          <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+            To urządzenie
+            {supported && subscribed === true && <StateBadge tone="ok" label="włączone" />}
+            {supported && subscribed === false && <StateBadge tone="muted" label="wyłączone" />}
           </div>
-          {pushSupported() && (
-            <div className="row-actions">
-              {browserPush ? (
-                <>
-                  <button className="btn btn-secondary" disabled={busy} onClick={() => runPush(() => api.post('/push/test'), 'Wysłano powiadomienie testowe')}>
-                    <Send size={16} /> Test
-                  </button>
-                  <button className="btn btn-secondary" disabled={busy} onClick={() => runPush(disablePush, 'Wyłączono powiadomienia na tym urządzeniu')}>
-                    <BellOff size={16} /> Wyłącz
-                  </button>
-                </>
-              ) : (
-                <button className="btn btn-primary" disabled={busy} onClick={() => runPush(enablePush, 'Włączono powiadomienia na tym urządzeniu')}>
-                  <Bell size={16} /> Włącz
-                </button>
-              )}
-            </div>
+          <p className="text-xs text-muted-foreground">
+            {supported
+              ? 'Powiadomienia push w tej przeglądarce / na tym telefonie.'
+              : 'Przeglądarka nie obsługuje powiadomień push (na iPhone: dodaj aplikację do ekranu początkowego).'}
+          </p>
+        </div>
+      </div>
+      {supported && (
+        <div className="flex flex-wrap gap-2">
+          {subscribed ? (
+            <>
+              <Button variant="outline" disabled={busy} onClick={() => run(() => api.post('/push/test'), 'Wysłano powiadomienie testowe')}>
+                <Send /> Test
+              </Button>
+              <Button variant="outline" disabled={busy} onClick={() => run(disablePush, 'Wyłączono powiadomienia na tym urządzeniu')}>
+                <BellOff /> Wyłącz na tym urządzeniu
+              </Button>
+            </>
+          ) : (
+            <Button disabled={busy || subscribed === null} onClick={() => run(enablePush, 'Włączono powiadomienia na tym urządzeniu')}>
+              <Bell /> Włącz na tym urządzeniu
+            </Button>
           )}
         </div>
-        {pushMsg && <div className={`alert alert-${pushMsg.type}`}>{pushMsg.text}</div>}
-        <p className="muted small">Progi i rodzaje alarmów ustawiasz osobno dla każdej lodówki na jej stronie.</p>
-      </section>
+      )}
+      {supported && subscribed && (
+        <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+          Nie widzisz powiadomienia? Na komputerze sprawdź, czy system nie blokuje powiadomień z przeglądarki.
+        </p>
+      )}
+    </div>
+  );
+}
 
-      <section className="card">
-        <h2>Zmiana hasła</h2>
-        <ChangePasswordForm />
-      </section>
+export default function SettingsPage() {
+  const { user, setUser } = useAuth();
+  const [panel, setPanel] = useState(null); // 'name' | 'password' | 'notifications' | 'history'
+
+  const saveProfile = async (patch, okText = 'Zapisano') => {
+    try {
+      const res = await api.patch('/auth/me', patch);
+      setUser(res.data.user);
+      toast.success(okText);
+      return true;
+    } catch (err) {
+      toast.error(apiError(err));
+      return false;
+    }
+  };
+
+  const panelProps = (key) => ({ open: panel === key, onOpenChange: (o) => setPanel(o ? key : null) });
+
+  return (
+    <div className="mx-auto grid w-full max-w-2xl gap-6">
+      <PageHeader title="Ustawienia" />
+
+      <Card className="gap-0 py-0">
+        <MenuItem icon={UserRound} title="Nazwa użytkownika" value={user.display_name || 'nie ustawiono'} onClick={() => setPanel('name')} />
+        <Separator />
+        <MenuItem icon={KeyRound} title="Zmień hasło" value="Inne urządzenia zostaną wylogowane" onClick={() => setPanel('password')} />
+        <Separator />
+        <MenuItem
+          icon={Bell}
+          title="Powiadomienia"
+          value={user.notifications_enabled ? 'Włączone' : 'Wstrzymane'}
+          onClick={() => setPanel('notifications')}
+        />
+        <Separator />
+        <MenuItem
+          icon={History}
+          title="Historia stref"
+          value={user.show_short_alerts ? 'Pokazuje krótkie przekroczenia' : 'Tylko alarmy z powiadomieniem'}
+          onClick={() => setPanel('history')}
+        />
+      </Card>
+
+      <Panel {...panelProps('name')} title="Nazwa użytkownika" description="Widać ją w menu i w panelu administratora.">
+        {panel === 'name' && (
+          <NameForm user={user} onSave={async (name) => { if (await saveProfile({ display_name: name })) setPanel(null); }} />
+        )}
+      </Panel>
+
+      <Panel {...panelProps('password')} title="Zmień hasło" description="Po zmianie inne urządzenia zostaną wylogowane.">
+        {panel === 'password' && (
+          <ChangePasswordForm onDone={() => { setPanel(null); toast.success('Hasło zmienione. Inne urządzenia zostały wylogowane.'); }} />
+        )}
+      </Panel>
+
+      <Panel {...panelProps('notifications')} title="Powiadomienia" description="Progi i rodzaje alarmów ustawiasz osobno dla każdej strefy na jej stronie.">
+        <SwitchRow
+          label="Wysyłaj mi powiadomienia"
+          description="Wyłączenie wstrzymuje wszystkie powiadomienia na wszystkich urządzeniach. Alarmy nadal są zapisywane."
+          checked={user.notifications_enabled}
+          onCheckedChange={(v) => saveProfile({ notifications_enabled: v })}
+        />
+        <Separator />
+        {panel === 'notifications' && <DevicePush />}
+      </Panel>
+
+      <Panel {...panelProps('history')} title="Historia stref">
+        <SwitchRow
+          label="Pokazuj krótkie przekroczenia"
+          description="Przekroczenia krótsze niż ustawione opóźnienie (bez powiadomienia) w historii alarmów każdej strefy."
+          checked={Boolean(user.show_short_alerts)}
+          onCheckedChange={(v) => saveProfile({ show_short_alerts: v })}
+        />
+      </Panel>
     </div>
   );
 }

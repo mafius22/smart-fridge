@@ -13,6 +13,19 @@ export function timeAgo(ts) {
   return `${Math.floor(s / 86400)} dni temu`;
 }
 
+// Polska odmiana: 1 lodowka, 2-4 lodowki, 5+ lodowek (12-14 tez "lodowek")
+export function plural(n, one, few, many) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (n === 1) return `${n} ${one}`;
+  if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) return `${n} ${few}`;
+  return `${n} ${many}`;
+}
+
+export function formatTime(ts) {
+  return ts ? format(new Date(ts * 1000), 'HH:mm') : '-';
+}
+
 export function formatDateTime(ts) {
   return ts ? format(new Date(ts * 1000), 'dd.MM.yyyy HH:mm') : '-';
 }
@@ -23,6 +36,11 @@ export function formatDuration(seconds) {
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours} h ${minutes % 60} min`;
   return `${Math.floor(hours / 24)} dni`;
+}
+
+// Jak dlugo trwa cos, co zaczelo sie o ts (np. aktywny alarm)
+export function durationSince(ts) {
+  return formatDuration(Math.max(0, Math.floor(Date.now() / 1000) - ts));
 }
 
 export function thresholdsLabel(settings) {
@@ -54,7 +72,7 @@ const END_REASON_LABELS = {
   prefs_changed: 'zmiana ustawień',
   access_removed: 'odebrany dostęp',
   sensor_changed: 'zmiana czujnika',
-  fridge_disabled: 'lodówka wyłączona',
+  fridge_disabled: 'strefa wyłączona',
   board_disabled: 'płytka wyłączona',
   user_blocked: 'konto zablokowane',
 };
