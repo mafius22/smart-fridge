@@ -1,5 +1,4 @@
 from flask import current_app
-from sqlalchemy import BigInteger, func, literal_column
 
 from app.extensions import db
 from app.models import Board, Measurement, Sensor, SensorAssignment, UserFridge
@@ -7,13 +6,10 @@ from app.models.alert import FAULT_KINDS, KIND_OFFLINE, KIND_SENSOR_ERROR
 from app.services import alert_service
 from app.utils import now_ts
 
-# Rozmiar przedzialu wykresu w zaleznosci od zakresu (punktow ~300-900); 0 = surowe pomiary
-BUCKETS = (
-    (36 * 3600, 0),
-    (8 * 86400, 15 * 60),
-    (35 * 86400, 3600),
-    (200 * 86400, 6 * 3600),
-)
+# Wykres pokazuje tylko prawdziwe pomiary. Wiecej niz 2 punkty na piksel szerokosci i tak nie widac,
+# wiec przy wiekszej liczbie z kazdego przedzialu o szerokosci 1 piksela zostaje najnizszy i najwyzszy
+# pomiar - wykres wyglada jak z pelnych danych, a przekroczenia progow nigdy nie znikaja.
+DEFAULT_WIDTH = 1000
 MAX_RANGE_S = 400 * 86400
 
 
@@ -114,38 +110,45 @@ def _alert_dict(alert, sensor):
     return data
 
 
-def choose_bucket(span):
-    for max_span, bucket in BUCKETS:
-        if span <= max_span:
-            return bucket
-    return 86400
+def _keep_extremes(rows, bucket):
+    """Z kazdego przedzialu `bucket` sekund najnizszy i najwyzszy pomiar (prawdziwe wartosci i czasy)."""
+    result = []
+    group = []
+    current = None
+    for ts, temp in rows:
+        key = ts // bucket
+        if key != current and group:
+            result.extend(_extremes(group))
+            group = []
+        current = key
+        group.append((ts, temp))
+    if group:
+        result.extend(_extremes(group))
+    return result
 
 
-def history(fridge_id, start, end):
-    """Punkty wykresu {ts, avg, min, max}; dla dluzszych zakresow agregacja w bazie."""
-    bucket = choose_bucket(end - start)
-    base = db.session.query(Measurement).filter(
-        Measurement.fridge_id == fridge_id, Measurement.ts >= start, Measurement.ts <= end
+def _extremes(group):
+    low = min(group, key=lambda r: r[1])
+    high = max(group, key=lambda r: r[1])
+    return sorted({low, high})
+
+
+def history(fridge_id, start, end, width=DEFAULT_WIDTH):
+    """
+    Punkty wykresu {ts, temp} - zawsze prawdziwe pomiary, bez usredniania.
+    width = szerokosc wykresu w pikselach. bucket_s = 0: wszystkie pomiary;
+    > 0: z kazdego przedzialu bucket_s sekund (1 piksel) najnizszy i najwyzszy pomiar.
+    """
+    rows = (
+        db.session.query(Measurement.ts, Measurement.temperature)
+        .filter(Measurement.fridge_id == fridge_id, Measurement.ts >= start, Measurement.ts <= end)
+        .order_by(Measurement.ts)
+        .all()
     )
-    if bucket == 0:
-        rows = base.with_entities(Measurement.ts, Measurement.temperature).order_by(Measurement.ts).all()
-        points = [{"ts": ts, "avg": t, "min": t, "max": t} for ts, t in rows]
-    else:
-        # bucket pochodzi z BUCKETS (nie od klienta) - bezpieczny w tekscie SQL; dzielenie calkowite w SQLite i Postgresie
-        bucket_expr = literal_column(f"(measurements.ts / {int(bucket)}) * {int(bucket)}", type_=BigInteger)
-        rows = (
-            base.with_entities(
-                bucket_expr.label("bucket"),
-                func.avg(Measurement.temperature),
-                func.min(Measurement.temperature),
-                func.max(Measurement.temperature),
-            )
-            .group_by(bucket_expr)
-            .order_by(bucket_expr)
-            .all()
-        )
-        points = [
-            {"ts": int(b), "avg": round(float(avg), 2), "min": float(mn), "max": float(mx)}
-            for b, avg, mn, mx in rows
-        ]
+    rows = [(int(ts), float(t)) for ts, t in rows]
+    bucket = 0
+    if len(rows) > 2 * width:
+        bucket = max(1, -(-(end - start) // width))
+        rows = _keep_extremes(rows, bucket)
+    points = [{"ts": ts, "temp": t} for ts, t in rows]
     return {"bucket_s": bucket, "start": start, "end": end, "points": points}

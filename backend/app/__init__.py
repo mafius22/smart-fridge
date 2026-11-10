@@ -31,6 +31,9 @@ def create_app(config_name=None):
     app.register_blueprint(api_bp, url_prefix='/api')
     register_error_handlers(app)
 
+    from app.compression import init_compression
+    init_compression(app)
+
     from app.cli import register_cli
     register_cli(app)
 

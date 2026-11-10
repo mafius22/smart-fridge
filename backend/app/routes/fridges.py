@@ -68,7 +68,7 @@ def update_prefs(fridge_id):
 @api_bp.route("/fridges/<int:fridge_id>/measurements", methods=["GET"])
 @login_required
 def get_measurements(fridge_id):
-    """?from=&to= (epoch s). Domyslnie ostatnie 24 h."""
+    """?from=&to= (epoch s), domyslnie ostatnie 24 h. ?width= szerokosc wykresu w px (ile punktow ma sens)."""
     fridge = access_service.get_accessible_fridge(current_user, fridge_id)
     now = now_ts()
     end = get_int_arg("to", default=now, lo=0)
@@ -77,7 +77,8 @@ def get_measurements(fridge_id):
         raise ApiError("Parametr from musi być mniejszy od to", 400, "validation")
     if end - start > fridge_service.MAX_RANGE_S:
         raise ApiError("Zakres może mieć maks. 400 dni", 400, "validation")
-    return jsonify(fridge_service.history(fridge.id, start, end))
+    width = get_int_arg("width", default=fridge_service.DEFAULT_WIDTH, lo=100, hi=4000)
+    return jsonify(fridge_service.history(fridge.id, start, end, width))
 
 
 @api_bp.route("/fridges/<int:fridge_id>/alerts", methods=["GET"])

@@ -252,7 +252,7 @@ def test_offline_detection(app, fridge, pushes):
     assert Alert.query.filter_by(kind="offline", ended_at=None).count() == 0
 
 
-def test_history_buckets(app, fridge, client, user):
+def test_history_real_measurements(app, fridge, client, user):
     from conftest import login
     now = now_ts()
     ingest_data(BOARD, _data(*[(now - 7000 + i * 300, 4.0 + i * 0.1) for i in range(20)]))
@@ -263,6 +263,34 @@ def test_history_buckets(app, fridge, client, user):
     assert raw["bucket_s"] == 0
     assert len(raw["points"]) == 20
 
+    # 7 dni: nadal wszystkie prawdziwe pomiary, bez usredniania
     week = client.get(f"/api/fridges/{fridge.id}/measurements?from={now - 7 * 86400}&to={now}").get_json()
-    assert week["bucket_s"] == 900
-    assert 0 < len(week["points"]) < 20
+    assert week["bucket_s"] == 0
+    assert [p["temp"] for p in week["points"]] == [round(4.0 + i * 0.1, 1) for i in range(20)]
+
+
+def test_history_reduced_to_chart_width_keeps_real_extremes(app, fridge, client, user):
+    from conftest import login
+    now = now_ts()
+    temps = [4.0, 9.5, 4.1, 4.2, 1.0, 4.3] * 50          # 300 pomiarow; skoki 9.5 i 1.0 nie moga zniknac
+    # Czujnik przypiety od now - 7200 (fixture) - pomiary co 20 s w tym oknie
+    ingest_data(BOARD, _data(*[(now - 6500 + i * 20, t) for i, t in enumerate(temps)]))
+    db.session.commit()
+
+    login(client, "user@test.pl")
+    url = f"/api/fridges/{fridge.id}/measurements?from={now - 7000}&to={now}"
+    full = client.get(url + "&width=1000").get_json()      # 300 <= 2 x 1000 - wszystkie pomiary
+    assert full["bucket_s"] == 0 and len(full["points"]) == 300
+
+    narrow = client.get(url + "&width=100").get_json()     # 300 > 2 x 100 - min i max na piksel
+    values = [p["temp"] for p in narrow["points"]]
+    assert narrow["bucket_s"] == 70 and len(values) <= 2 * 101
+    assert set(values) <= set(temps)                       # tylko prawdziwe pomiary
+    assert max(values) == 9.5 and min(values) == 1.0
+
+    # Duza odpowiedz JSON przychodzi skompresowana, gdy przegladarka to obsluguje
+    gz = client.get(url + "&width=1000", headers={"Accept-Encoding": "gzip"})
+    assert gz.headers["Content-Encoding"] == "gzip"
+    import gzip
+    import json
+    assert json.loads(gzip.decompress(gz.data))["points"] == full["points"]
