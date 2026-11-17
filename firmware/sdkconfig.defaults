@@ -1,0 +1,24 @@
+# Ustawienia projektu potrzebne do zbudowania firmware.
+
+# Flash 4 MB + wlasna tablica partycji (2 sloty OTA, nvs_keys, bufor offline)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Powrot do poprzedniego firmware, gdy nowy po OTA nie polaczy sie z MQTT
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Mniejszy obraz (szybsze OTA, zapas w slocie)
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+
+# Stos taska main: pomiary, JSON, SNTP, bufor i wysylka paczek (domyslne 3584 B bez zapasu)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# SNTP wysyla zapytanie od razu po starcie (bez losowego opoznienia 0-5 s)
+# CONFIG_LWIP_SNTP_STARTUP_DELAY is not set
+
+# BLE do konfiguracji Wi-Fi i brokera MQTT
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
