@@ -1,69 +1,78 @@
-import os
 import json
 import logging
-from pywebpush import webpush, WebPushException
+from concurrent.futures import ThreadPoolExecutor
+
+from flask import current_app, g
+from pywebpush import WebPushException, webpush
+
 from app.extensions import db
-from app.models import PushSubscriber, SubscriberDeviceSettings
+from app.models import PushSubscription
 
 logger = logging.getLogger(__name__)
 
-def send_alert(temperature, device_obj, app):
-    """
-    Wysyła powiadomienie push.
-    
-    Logika:
-    1. Znajduje subskrybentów przypisanych do urządzenia.
-    2. Sprawdza, czy subskrybent jest globalnie aktywny.
-    3. Sprawdza, czy aktualna temperatura > custom_threshold subskrybenta dla tego urządzenia.
-    """
-    vapid_private = os.getenv("VAPID_PRIVATE_KEY")
-    vapid_email = os.getenv("VAPID_EMAIL")
+# Wysylka w tle: wolny serwer push nie blokuje odbioru MQTT ani odpowiedzi API
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="push")
 
-    if not vapid_private:
-        logger.error("Brak klucza VAPID_PRIVATE_KEY w .env!")
+
+def queue(user_id, title, body, url="/", tag=None):
+    """Dodaje powiadomienie do wyslania po commicie biezacej transakcji (send_pending)."""
+    if "pending_push" not in g:
+        g.pending_push = []
+    g.pending_push.append({"user_id": user_id, "title": title, "body": body, "url": url, "tag": tag})
+
+
+def discard_pending():
+    g.pop("pending_push", None)
+
+
+def send_pending():
+    """Wywolywac po db.session.commit() - wysyla powiadomienia zebrane w tej transakcji."""
+    items = g.pop("pending_push", None)
+    if not items:
         return
+    app = current_app._get_current_object()
+    if not app.config.get("VAPID_PRIVATE_KEY"):
+        logger.warning(f"Brak VAPID_PRIVATE_KEY - pomijam {len(items)} powiadomień")
+        return
+    _executor.submit(_send_batch, app, items)
 
+
+def _vapid_sub(email):
+    # Serwery push wymagaja adresu w formie mailto:
+    if email and not email.startswith("mailto:"):
+        return f"mailto:{email}"
+    return email
+
+
+def _send_batch(app, items):
     with app.app_context():
-        alerts_to_send = db.session.query(PushSubscriber, SubscriberDeviceSettings)\
-            .join(SubscriberDeviceSettings, PushSubscriber.id == SubscriberDeviceSettings.subscriber_id)\
-            .filter(SubscriberDeviceSettings.device_id == device_obj.id)\
-            .filter(PushSubscriber.is_active == True)\
-            .filter(SubscriberDeviceSettings.custom_threshold < temperature)\
-            .all()
-        
-        if not alerts_to_send:
-            return
+        try:
+            for item in items:
+                _send_to_user(app, item)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Błąd wysyłki push: {e}")
 
-        logger.info(f"ALARM: Wysyłanie powiadomień do {len(alerts_to_send)} użytkowników dla {device_obj.name}.")
 
-        for sub, settings in alerts_to_send:
-            
-            payload = json.dumps({
-                "title": f"ALARM: {device_obj.name} 🔥",
-                "body": f"Temperatura: {temperature}°C (Twój limit: {settings.custom_threshold}°C)",
-                "icon": "/vite.svg",
-                "data": {
-                    "url": f"/devices/{device_obj.id}" 
-                }
-            })
-
-            try:
-                webpush(
-                    subscription_info={
-                        "endpoint": sub.endpoint,
-                        "keys": {"p256dh": sub.p256dh, "auth": sub.auth}
-                    },
-                    data=payload,
-                    vapid_private_key=vapid_private,
-                    vapid_claims={"sub": vapid_email},
-                    ttl=43200, 
-                    headers={"Urgency": "high"}
-                )
-            except WebPushException as ex:
-                if ex.response and ex.response.status_code == 410:
-                    logger.info(f"Usuwanie martwej subskrypcji: {sub.id}")
-                    db.session.delete(sub)
-                else:
-                    logger.error(f"Błąd WebPush dla {sub.id}: {ex}")
-
-        db.session.commit()
+def _send_to_user(app, item):
+    subscriptions = PushSubscription.query.filter_by(user_id=item["user_id"]).all()
+    payload = json.dumps({k: item[k] for k in ("title", "body", "url", "tag")})
+    for sub in subscriptions:
+        try:
+            webpush(
+                subscription_info={"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
+                data=payload,
+                vapid_private_key=app.config["VAPID_PRIVATE_KEY"],
+                vapid_claims={"sub": _vapid_sub(app.config.get("VAPID_EMAIL"))},
+                ttl=12 * 3600,
+                headers={"Urgency": "high"},
+            )
+            logger.info(f"Push -> user {item['user_id']}: {item['title']} | {item['body']}")
+        except WebPushException as ex:
+            status = ex.response.status_code if ex.response is not None else None
+            if status in (404, 410):
+                logger.info(f"Usuwam wygasłą subskrypcję push {sub.id} (user {sub.user_id})")
+                db.session.delete(sub)
+            else:
+                logger.error(f"Błąd WebPush (subskrypcja {sub.id}): {ex}")
