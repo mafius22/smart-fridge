@@ -67,8 +67,40 @@ Run the backend as a **single process with several threads** (`gunicorn -w 1 --t
 ```powershell
 cd frontend
 npm install
-npm run dev                     # http://localhost:5173, /api proxied to the backend
+npm run dev                    
 ```
+
+### Firmware (`/firmware`)
+Requires ESP-IDF 5.5.1.:
+```powershell
+& C:\path\to\esp-idf\export.ps1
+cd firmware
+idf.py build
+idf.py flash monitor     
+```
+
+###  BLE board setup
+
+A new board is unconfigured: it does not measure or connect to the network, starts BLE immediately and the LED blinks.
+
+1. Install nRF Connect on a phone and scan. Connect to **`SF-XXXX`**.
+2. Open the service **`0x00FF`**. It has 6 characteristics; each shows its name in the descriptor *Characteristic User Description*.
+3. Write the values as **Text (UTF-8)**:
+
+| UUID | Name | Value |
+|---|---|---|
+| `FF01` | Wi-Fi SSID | network name, 1-32 characters |
+| `FF02` | Wi-Fi haslo | Wi-Fi password, 8-63 characters |
+| `FF04` | MQTT adres | `mqtts://<broker-host>:<port>` |
+| `FF05` | MQTT login | broker username |
+| `FF06` | MQTT haslo | broker password  |
+| `FF03` | Zapisz | `1` - validates, saves to the board and restarts |
+
+
+Notes:
+* Use the same broker host, port, login and password as the backend (`MQTT_BROKER`, `MQTT_PORT`, `MQTT_LOGIN`, `MQTT_PASS` in `backend/.env`).
+* **Reconfigure later:** hold **BOOT for 4 s** - BLE turns on for 5 minutes (LED blinks).
+* **Factory reset:** hold **BOOT for 10 s** and release - erases Wi-Fi, broker settings and buffered measurements; the board becomes unconfigured.
 
 ### Accounts and access
 * The admin creates user accounts and grants access to fridges.
