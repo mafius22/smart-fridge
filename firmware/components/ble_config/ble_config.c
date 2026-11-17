@@ -17,6 +17,7 @@
 #include "esp_gap_ble_api.h"
 #include "esp_gatts_api.h"
 #include "esp_bt_defs.h"
+#include "esp_gatt_common_api.h"
 
 static const char *TAG = "BLE_CONFIG";
 
@@ -26,42 +27,181 @@ static const char *TAG = "BLE_CONFIG";
 #define BLE_TIMEOUT_MS          (5 * 60 * 1000)
 #define LED_GPIO                GPIO_NUM_2
 #define LED_BLINK_MS            500
+#define BLE_LOCAL_MTU           517             // telefon moze wyslac dlugi tekst jednym zapisem (bez zapisu dzielonego)
 
-// Wymogi WPA2 - zle dane nie sa zapisywane, telefon dostaje blad zapisu
+// Wymogi WPA2 i limity pol - zle dane nie sa zapisywane, telefon dostaje blad zapisu
 #define SSID_MAX_LEN            32
 #define PASS_MIN_LEN            8
 #define PASS_MAX_LEN            63
+#define MQTT_URI_MAX_LEN        128
+#define MQTT_USER_MAX_LEN       64
+#define MQTT_PASS_MAX_LEN       128
 #define BLE_ERR_INVALID_CREDENTIALS ((esp_gatt_status_t)0x80) // kod bledu aplikacji (zakres 0x80-0x9F)
 
-// --- UUID ---
-#define GATTS_SERVICE_UUID_TEST   0x00FF
+// --- UUID (FF01-FF03 bez zmian - dotychczasowa konfiguracja Wi-Fi dziala tak samo) ---
+#define GATTS_SERVICE_UUID        0x00FF
 #define GATTS_CHAR_UUID_SSID      0xFF01
 #define GATTS_CHAR_UUID_PASS      0xFF02
 #define GATTS_CHAR_UUID_ACTION    0xFF03
-#define GATTS_NUM_HANDLE_TEST     8
+#define GATTS_CHAR_UUID_MQTT_URI  0xFF04
+#define GATTS_CHAR_UUID_MQTT_USER 0xFF05
+#define GATTS_CHAR_UUID_MQTT_PASS 0xFF06
 
 // --- ZMIENNE GLOBALNE ---
 static TimerHandle_t s_ble_timer = NULL;
 static gpio_num_t s_btn_gpio = GPIO_NUM_0;
 static bool s_ble_is_active = false;
 static bool s_ble_connected = false;
-static bool s_no_timeout = false;               // brak zapisanego Wi-Fi: BLE dziala az do skonfigurowania
+static bool s_no_timeout = false;               // plytka nieskonfigurowana: BLE dziala az do skonfigurowania
 static volatile bool s_ble_timeout_expired = false; // ustawiane przez timer, BLE wylacza task przycisku
 static char s_device_name[8];                   // "SF-DF38" - koncowka MAC, rozne dla kazdej plytki
 static factory_reset_cb_t s_factory_reset_cb = NULL;
 
-static char s_wifi_ssid[33] = {0};
-static char s_wifi_pass[65] = {0};
+static char s_wifi_ssid[SSID_MAX_LEN + 1];
+static char s_wifi_pass[PASS_MAX_LEN + 1];
+static char s_mqtt_uri[MQTT_URI_MAX_LEN + 1];
+static char s_mqtt_user[MQTT_USER_MAX_LEN + 1];
+static char s_mqtt_pass[MQTT_PASS_MAX_LEN + 1];
 
-static uint16_t s_handle_ssid = 0;
-static uint16_t s_handle_pass = 0;
+// Pola tekstowe: wartosc z telefonu trafia do buf (maks. max_len znakow), zapis do NVS dopiero po "Zapisz"
+typedef struct {
+    const char *ns;         // przestrzen NVS
+    const char *key;        // klucz NVS
+    char *buf;
+    size_t max_len;
+    uint16_t handle;        // uchwyt wartosci charakterystyki (z tabeli atrybutow)
+} text_field_t;
+
+static text_field_t s_fields[] = {
+    { "wifi", "ssid", s_wifi_ssid, SSID_MAX_LEN,      0 },
+    { "wifi", "pass", s_wifi_pass, PASS_MAX_LEN,      0 },
+    { "mqtt", "uri",  s_mqtt_uri,  MQTT_URI_MAX_LEN,  0 },
+    { "mqtt", "user", s_mqtt_user, MQTT_USER_MAX_LEN, 0 },
+    { "mqtt", "pass", s_mqtt_pass, MQTT_PASS_MAX_LEN, 0 },
+};
+#define FIELD_COUNT (sizeof(s_fields) / sizeof(s_fields[0]))
+
 static uint16_t s_handle_action = 0;
+
+// Zapis dzielony (Prepare Write): dlugi tekst przychodzi kawalkami z przesunieciem, a trafia do pola
+// dopiero po "Execute Write". Anulowanie albo za dlugi tekst = pole bez zmian.
+static struct {
+    text_field_t *field;    // pole, ktorego dotyczy trwajacy zapis dzielony (NULL = brak)
+    char data[MQTT_URI_MAX_LEN + 1];
+    size_t len;
+    bool too_long;
+} s_prep;
 
 static void ble_timeout_callback(TimerHandle_t xTimer);
 static void ble_config_start(void);
 static void ble_config_stop_internal(void);
 
-static bool credentials_valid(void) {
+// ----------------------------------------------------------------------------
+//                              TABELA ATRYBUTOW GATT
+// ----------------------------------------------------------------------------
+
+// Kolejnosc w tabeli = kolejnosc w aplikacji nRF Connect. Kazde pole: deklaracja, wartosc, opis (0x2901)
+enum {
+    IDX_SVC,
+    IDX_SSID_DECL, IDX_SSID_VAL, IDX_SSID_DESC,
+    IDX_PASS_DECL, IDX_PASS_VAL, IDX_PASS_DESC,
+    IDX_URI_DECL,  IDX_URI_VAL,  IDX_URI_DESC,
+    IDX_USER_DECL, IDX_USER_VAL, IDX_USER_DESC,
+    IDX_MPASS_DECL, IDX_MPASS_VAL, IDX_MPASS_DESC,
+    IDX_ACT_DECL,  IDX_ACT_VAL,  IDX_ACT_DESC,
+    IDX_NB,
+};
+
+static const uint16_t s_uuid_primary_service = ESP_GATT_UUID_PRI_SERVICE;
+static const uint16_t s_uuid_char_declare    = ESP_GATT_UUID_CHAR_DECLARE;
+static const uint16_t s_uuid_char_desc       = ESP_GATT_UUID_CHAR_DESCRIPTION;
+static const uint16_t s_uuid_service         = GATTS_SERVICE_UUID;
+static const uint16_t s_uuid_ssid            = GATTS_CHAR_UUID_SSID;
+static const uint16_t s_uuid_pass            = GATTS_CHAR_UUID_PASS;
+static const uint16_t s_uuid_mqtt_uri        = GATTS_CHAR_UUID_MQTT_URI;
+static const uint16_t s_uuid_mqtt_user       = GATTS_CHAR_UUID_MQTT_USER;
+static const uint16_t s_uuid_mqtt_pass       = GATTS_CHAR_UUID_MQTT_PASS;
+static const uint16_t s_uuid_action          = GATTS_CHAR_UUID_ACTION;
+static const uint8_t  s_prop_write           = ESP_GATT_CHAR_PROP_BIT_WRITE;
+static uint8_t s_empty_value[1];                 // wartosci tylko do zapisu - nic do odczytu
+
+// Opisy widoczne w nRF Connect (bez polskich znakow - aplikacje roznie je wyswietlaja)
+static const char s_desc_ssid[]      = "Wi-Fi SSID";
+static const char s_desc_pass[]      = "Wi-Fi haslo";
+static const char s_desc_mqtt_uri[]  = "MQTT adres";
+static const char s_desc_mqtt_user[] = "MQTT login";
+static const char s_desc_mqtt_pass[] = "MQTT haslo";
+static const char s_desc_action[]    = "Zapisz";
+
+// Deklaracja charakterystyki (tylko zapis) - odpowiada stos
+#define CHAR_DECL() \
+    { {ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&s_uuid_char_declare, ESP_GATT_PERM_READ, \
+      sizeof(uint8_t), sizeof(uint8_t), (uint8_t *)&s_prop_write} }
+// Wartosc charakterystyki - zapisy obsluguje aplikacja (walidacja, zapis dzielony)
+#define CHAR_VAL(uuid, max) \
+    { {ESP_GATT_RSP_BY_APP}, {ESP_UUID_LEN_16, (uint8_t *)&(uuid), ESP_GATT_PERM_WRITE, \
+      (max), 0, s_empty_value} }
+// Opis pola (Characteristic User Description, 0x2901) - odczyt obsluguje stos
+#define CHAR_DESC(text) \
+    { {ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&s_uuid_char_desc, ESP_GATT_PERM_READ, \
+      sizeof(text) - 1, sizeof(text) - 1, (uint8_t *)(text)} }
+
+static const esp_gatts_attr_db_t s_gatt_db[IDX_NB] = {
+    [IDX_SVC] = { {ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&s_uuid_primary_service, ESP_GATT_PERM_READ,
+                  sizeof(uint16_t), sizeof(s_uuid_service), (uint8_t *)&s_uuid_service} },
+
+    [IDX_SSID_DECL]  = CHAR_DECL(),
+    [IDX_SSID_VAL]   = CHAR_VAL(s_uuid_ssid, SSID_MAX_LEN),
+    [IDX_SSID_DESC]  = CHAR_DESC(s_desc_ssid),
+
+    [IDX_PASS_DECL]  = CHAR_DECL(),
+    [IDX_PASS_VAL]   = CHAR_VAL(s_uuid_pass, PASS_MAX_LEN),
+    [IDX_PASS_DESC]  = CHAR_DESC(s_desc_pass),
+
+    [IDX_URI_DECL]   = CHAR_DECL(),
+    [IDX_URI_VAL]    = CHAR_VAL(s_uuid_mqtt_uri, MQTT_URI_MAX_LEN),
+    [IDX_URI_DESC]   = CHAR_DESC(s_desc_mqtt_uri),
+
+    [IDX_USER_DECL]  = CHAR_DECL(),
+    [IDX_USER_VAL]   = CHAR_VAL(s_uuid_mqtt_user, MQTT_USER_MAX_LEN),
+    [IDX_USER_DESC]  = CHAR_DESC(s_desc_mqtt_user),
+
+    [IDX_MPASS_DECL] = CHAR_DECL(),
+    [IDX_MPASS_VAL]  = CHAR_VAL(s_uuid_mqtt_pass, MQTT_PASS_MAX_LEN),
+    [IDX_MPASS_DESC] = CHAR_DESC(s_desc_mqtt_pass),
+
+    [IDX_ACT_DECL]   = CHAR_DECL(),
+    [IDX_ACT_VAL]    = CHAR_VAL(s_uuid_action, 1),
+    [IDX_ACT_DESC]   = CHAR_DESC(s_desc_action),
+};
+
+// ----------------------------------------------------------------------------
+//                              POLA I WALIDACJA
+// ----------------------------------------------------------------------------
+
+static text_field_t *field_by_handle(uint16_t handle) {
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        if (s_fields[i].handle != 0 && s_fields[i].handle == handle) return &s_fields[i];
+    }
+    return NULL;
+}
+
+// Biezace wartosci z NVS - zmienia sie tylko pola wpisane w tej sesji, reszta zostaje
+static void load_fields_from_nvs(void) {
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        text_field_t *f = &s_fields[i];
+        memset(f->buf, 0, f->max_len + 1);
+        if (storage_load_str(f->ns, f->key, f->buf, f->max_len + 1, "") != ESP_OK) {
+            f->buf[0] = '\0';
+        }
+    }
+}
+
+static bool starts_with(const char *s, const char *prefix) {
+    return strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+static bool config_valid(void) {
     size_t ssid_len = strlen(s_wifi_ssid);
     size_t pass_len = strlen(s_wifi_pass);
     if (ssid_len < 1 || ssid_len > SSID_MAX_LEN) {
@@ -69,11 +209,95 @@ static bool credentials_valid(void) {
         return false;
     }
     if (pass_len < PASS_MIN_LEN || pass_len > PASS_MAX_LEN) {
-        ESP_LOGE(TAG, "Bledne haslo (dlugosc %u, wymagane %d-%d) - nie zapisuje",
+        ESP_LOGE(TAG, "Bledne haslo Wi-Fi (dlugosc %u, wymagane %d-%d) - nie zapisuje",
                  (unsigned)pass_len, PASS_MIN_LEN, PASS_MAX_LEN);
         return false;
     }
+    // Adres brokera: mqtt:// (bez szyfrowania) albo mqtts:// (TLS), z nazwa hosta; port opcjonalny
+    const char *host = NULL;
+    if (starts_with(s_mqtt_uri, "mqtts://")) host = s_mqtt_uri + strlen("mqtts://");
+    else if (starts_with(s_mqtt_uri, "mqtt://")) host = s_mqtt_uri + strlen("mqtt://");
+    if (host == NULL || *host == '\0' || *host == ':' || *host == '/') {
+        ESP_LOGE(TAG, "Bledny adres MQTT (wymagane mqtts://host[:port] albo mqtt://host[:port]) - nie zapisuje");
+        return false;
+    }
+    if (strchr(s_mqtt_uri, ' ') != NULL) {
+        ESP_LOGE(TAG, "Adres MQTT zawiera spacje - nie zapisuje");
+        return false;
+    }
     return true;
+}
+
+// Zwykly zapis: cala wartosc w jednym kawalku (offset 0) zastepuje pole
+static esp_gatt_status_t write_field(text_field_t *f, const uint8_t *value, uint16_t len, uint16_t offset) {
+    if (offset != 0) return ESP_GATT_INVALID_OFFSET;
+    if (len > f->max_len) {
+        ESP_LOGE(TAG, "Za dlugi tekst dla '%s/%s' (%u > %u) - pole bez zmian",
+                 f->ns, f->key, (unsigned)len, (unsigned)f->max_len);
+        return ESP_GATT_INVALID_ATTR_LEN;
+    }
+    memset(f->buf, 0, f->max_len + 1);
+    memcpy(f->buf, value, len);
+    return ESP_GATT_OK;
+}
+
+// Zapis dzielony: kolejne kawalki z przesunieciem do bufora tymczasowego
+static esp_gatt_status_t prepare_field(text_field_t *f, const uint8_t *value, uint16_t len, uint16_t offset) {
+    if (offset == 0 || s_prep.field != f) {
+        memset(&s_prep, 0, sizeof(s_prep));
+        s_prep.field = f;
+    }
+    if (s_prep.too_long || (size_t)offset + len > f->max_len) {
+        s_prep.too_long = true;
+        ESP_LOGE(TAG, "Za dlugi tekst dla '%s/%s' (ponad %u znakow) - pole bez zmian",
+                 f->ns, f->key, (unsigned)f->max_len);
+        return ESP_GATT_INVALID_ATTR_LEN;
+    }
+    memcpy(s_prep.data + offset, value, len);
+    if ((size_t)offset + len > s_prep.len) s_prep.len = offset + len;
+    return ESP_GATT_OK;
+}
+
+// Execute Write: zatwierdzenie (caly tekst trafia do pola) albo anulowanie
+static void finish_prepared_write(bool execute) {
+    text_field_t *f = s_prep.field;
+    if (f != NULL && execute && !s_prep.too_long) {
+        memset(f->buf, 0, f->max_len + 1);
+        memcpy(f->buf, s_prep.data, s_prep.len);
+        ESP_LOGI(TAG, "Zapis dzielony '%s/%s': %u znakow", f->ns, f->key, (unsigned)s_prep.len);
+    } else if (f != NULL) {
+        ESP_LOGW(TAG, "Zapis dzielony '%s/%s' anulowany - pole bez zmian", f->ns, f->key);
+    }
+    memset(&s_prep, 0, sizeof(s_prep));
+}
+
+static bool save_fields_to_nvs(void) {
+    bool ok = true;
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        esp_err_t err = storage_save_str(s_fields[i].ns, s_fields[i].key, s_fields[i].buf);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Zapis '%s/%s' do NVS nieudany: %s", s_fields[i].ns, s_fields[i].key, esp_err_to_name(err));
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+static void send_write_response(esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param, esp_gatt_status_t status) {
+    if (!param->write.need_rsp) return;
+    esp_gatt_rsp_t *rsp = (esp_gatt_rsp_t *)calloc(1, sizeof(esp_gatt_rsp_t));
+    if (rsp == NULL) return;
+    // Odpowiedz na zapis dzielony musi powtorzyc otrzymany kawalek (telefon go sprawdza)
+    rsp->attr_value.handle = param->write.handle;
+    rsp->attr_value.offset = param->write.offset;
+    rsp->attr_value.auth_req = ESP_GATT_AUTH_REQ_NONE;
+    if (param->write.len > 0 && param->write.len <= sizeof(rsp->attr_value.value)) {
+        rsp->attr_value.len = param->write.len;
+        memcpy(rsp->attr_value.value, param->write.value, param->write.len);
+    }
+    esp_err_t err = esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, status, rsp);
+    if (err != ESP_OK) ESP_LOGE(TAG, "Send Rsp Error: %d", err);
+    free(rsp);
 }
 
 // ----------------------------------------------------------------------------
@@ -114,81 +338,55 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                 .min_interval = 0x20, .max_interval = 0x40, .appearance = 0x00,
                 .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
             });
-            
-            esp_gatt_srvc_id_t service_id;
-            service_id.is_primary = true;
-            service_id.id.inst_id = 0x00;
-            service_id.id.uuid.len = ESP_UUID_LEN_16;
-            service_id.id.uuid.uuid.uuid16 = GATTS_SERVICE_UUID_TEST;
-            esp_ble_gatts_create_service(gatts_if, &service_id, GATTS_NUM_HANDLE_TEST);
+            // Cala usluga (pola + opisy) jednym wywolaniem - uchwyty wracaja w ESP_GATTS_CREAT_ATTR_TAB_EVT
+            esp_ble_gatts_create_attr_tab(s_gatt_db, gatts_if, IDX_NB, 0);
             break;
 
-        case ESP_GATTS_CREATE_EVT:
-            ESP_LOGI(TAG, "Serwis utworzony, handle: %d", param->create.service_handle);
-            uint16_t service_handle = param->create.service_handle;
-            esp_ble_gatts_start_service(service_handle);
-
-            esp_bt_uuid_t char_uuid_ssid = { .len = ESP_UUID_LEN_16, .uuid = { .uuid16 = GATTS_CHAR_UUID_SSID } };
-            esp_ble_gatts_add_char(service_handle, &char_uuid_ssid, ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE, NULL, NULL);
-
-            esp_bt_uuid_t char_uuid_pass = { .len = ESP_UUID_LEN_16, .uuid = { .uuid16 = GATTS_CHAR_UUID_PASS } };
-            esp_ble_gatts_add_char(service_handle, &char_uuid_pass, ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE, NULL, NULL);
-
-            esp_bt_uuid_t char_uuid_act = { .len = ESP_UUID_LEN_16, .uuid = { .uuid16 = GATTS_CHAR_UUID_ACTION } };
-            esp_ble_gatts_add_char(service_handle, &char_uuid_act, ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE, NULL, NULL);
-            break;
-
-        case ESP_GATTS_ADD_CHAR_EVT:
-            if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_SSID) s_handle_ssid = param->add_char.attr_handle;
-            else if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_PASS) s_handle_pass = param->add_char.attr_handle;
-            else if (param->add_char.char_uuid.uuid.uuid16 == GATTS_CHAR_UUID_ACTION) s_handle_action = param->add_char.attr_handle;
+        case ESP_GATTS_CREAT_ATTR_TAB_EVT:
+            if (param->add_attr_tab.status != ESP_GATT_OK || param->add_attr_tab.num_handle != IDX_NB) {
+                ESP_LOGE(TAG, "Tworzenie uslugi BLE nieudane (status 0x%x, uchwytow %d/%d)",
+                         param->add_attr_tab.status, param->add_attr_tab.num_handle, IDX_NB);
+                break;
+            }
+            s_fields[0].handle = param->add_attr_tab.handles[IDX_SSID_VAL];
+            s_fields[1].handle = param->add_attr_tab.handles[IDX_PASS_VAL];
+            s_fields[2].handle = param->add_attr_tab.handles[IDX_URI_VAL];
+            s_fields[3].handle = param->add_attr_tab.handles[IDX_USER_VAL];
+            s_fields[4].handle = param->add_attr_tab.handles[IDX_MPASS_VAL];
+            s_handle_action = param->add_attr_tab.handles[IDX_ACT_VAL];
+            esp_ble_gatts_start_service(param->add_attr_tab.handles[IDX_SVC]);
+            ESP_LOGI(TAG, "Usluga BLE gotowa (%d atrybutow)", IDX_NB);
             break;
 
         case ESP_GATTS_WRITE_EVT: {
-            ESP_LOGI(TAG, "WRITE: hnd %d, len %d, prep %d, off %d", param->write.handle, param->write.len, param->write.is_prep, param->write.offset);
+            // Bez wypisywania wartosci - to moga byc hasla
+            ESP_LOGI(TAG, "WRITE: hnd %d, len %d, prep %d, off %d",
+                     param->write.handle, param->write.len, param->write.is_prep, param->write.offset);
             if (s_ble_timer) xTimerReset(s_ble_timer, 0);
 
-            if (param->write.handle == s_handle_ssid) {
-                if (param->write.offset == 0) memset(s_wifi_ssid, 0, sizeof(s_wifi_ssid));
-                if (param->write.offset + param->write.len < sizeof(s_wifi_ssid)) {
-                    memcpy(s_wifi_ssid + param->write.offset, param->write.value, param->write.len);
-                }
-            } else if (param->write.handle == s_handle_pass) {
-                if (param->write.offset == 0) memset(s_wifi_pass, 0, sizeof(s_wifi_pass));
-                if (param->write.offset + param->write.len < sizeof(s_wifi_pass)) {
-                    memcpy(s_wifi_pass + param->write.offset, param->write.value, param->write.len);
+            esp_gatt_status_t status = ESP_GATT_OK;
+            bool save_ok = false;
+            text_field_t *field = field_by_handle(param->write.handle);
+
+            if (field != NULL) {
+                status = param->write.is_prep
+                    ? prepare_field(field, param->write.value, param->write.len, param->write.offset)
+                    : write_field(field, param->write.value, param->write.len, param->write.offset);
+            } else if (param->write.handle == s_handle_action && !param->write.is_prep) {
+                // "1" = zapisz. Sprawdzamy dane przed odpowiedzia, zeby telefon dostal blad przy zlych danych
+                if (param->write.len > 0 && param->write.value[0] == '1') {
+                    save_ok = config_valid();
+                    if (!save_ok) status = BLE_ERR_INVALID_CREDENTIALS;
                 }
             }
 
-            // "1" na charakterystyce akcji = zapisz dane. Sprawdzamy je przed odpowiedzia, zeby telefon dostal blad
-            bool save_requested = (param->write.handle == s_handle_action && !param->write.is_prep &&
-                                   param->write.len > 0 && param->write.value[0] == '1');
-            bool save_ok = save_requested && credentials_valid();
-            esp_gatt_status_t status = (save_requested && !save_ok) ? BLE_ERR_INVALID_CREDENTIALS : ESP_GATT_OK;
+            send_write_response(gatts_if, param, status);
 
-            if (param->write.need_rsp) {
-                esp_gatt_rsp_t *rsp = (esp_gatt_rsp_t *)malloc(sizeof(esp_gatt_rsp_t));
-                if (rsp) {
-                    memset(rsp, 0, sizeof(esp_gatt_rsp_t));
-                    rsp->attr_value.handle = param->write.handle;
-                    rsp->attr_value.len = param->write.len;
-                    rsp->attr_value.offset = param->write.offset;
-                    rsp->attr_value.auth_req = ESP_GATT_AUTH_REQ_NONE;
-                    
-                    if (param->write.len > 0) {
-                        memcpy(rsp->attr_value.value, param->write.value, param->write.len);
-                    }
-                    
-                    esp_err_t err = esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, status, rsp);
-                    if (err != ESP_OK) ESP_LOGE(TAG, "Send Rsp Error: %d", err);
-                    free(rsp);
-                }
-            }
-            
             if (save_ok) {
                 ESP_LOGW(TAG, "ZAPIS I RESTART...");
-                storage_save_str("wifi", "ssid", s_wifi_ssid);
-                storage_save_str("wifi", "pass", s_wifi_pass);
+                if (!save_fields_to_nvs()) {
+                    ESP_LOGE(TAG, "Nie wszystkie dane zapisane - sprawdz konfiguracje po restarcie");
+                }
                 vTaskDelay(pdMS_TO_TICKS(500));
                 esp_restart();
             }
@@ -196,26 +394,28 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         }
 
         case ESP_GATTS_EXEC_WRITE_EVT:
-            ESP_LOGI(TAG, "EXEC WRITE (Koniec długiego zapisu)");
+            finish_prepared_write(param->exec_write.exec_write_flag == ESP_GATT_PREP_WRITE_EXEC);
             esp_ble_gatts_send_response(gatts_if, param->exec_write.conn_id, param->exec_write.trans_id, ESP_GATT_OK, NULL);
             break;
 
         case ESP_GATTS_CONNECT_EVT:
             ESP_LOGI(TAG, "CONNECTED");
             s_ble_connected = true;
+            memset(&s_prep, 0, sizeof(s_prep));
             if (s_ble_timer) xTimerReset(s_ble_timer, 0);
             break;
 
         case ESP_GATTS_DISCONNECT_EVT:
             ESP_LOGI(TAG, "DISCONNECTED");
             s_ble_connected = false;
+            memset(&s_prep, 0, sizeof(s_prep)); // przerwany zapis dzielony nie trafia do pola
             esp_ble_gap_start_advertising(&(esp_ble_adv_params_t){
                 .adv_int_min = 0x20, .adv_int_max = 0x40,
                 .adv_type = ADV_TYPE_IND, .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
                 .channel_map = ADV_CHNL_ALL, .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
             });
             break;
-            
+
         default: break;
     }
 }
@@ -227,6 +427,9 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 static void ble_config_start(void) {
     if (s_ble_is_active) return;
     ESP_LOGI(TAG, "Inicjalizacja BLE...");
+    // Zapisane wartosci jako punkt wyjscia - telefon zmienia tylko wpisane pola
+    load_fields_from_nvs();
+    memset(&s_prep, 0, sizeof(s_prep));
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
@@ -237,10 +440,13 @@ static void ble_config_start(void) {
     ESP_ERROR_CHECK(esp_ble_gatts_register_callback(gatts_event_handler));
     ESP_ERROR_CHECK(esp_ble_gap_register_callback(gap_event_handler));
     ESP_ERROR_CHECK(esp_ble_gatts_app_register(0));
+    // Wieksze MTU: dlugi tekst (adres brokera, haslo) jednym zapisem, gdy telefon to obsluguje
+    esp_err_t mtu_err = esp_ble_gatt_set_local_mtu(BLE_LOCAL_MTU);
+    if (mtu_err != ESP_OK) ESP_LOGW(TAG, "Nie ustawiono MTU %d: %s", BLE_LOCAL_MTU, esp_err_to_name(mtu_err));
 
     s_ble_is_active = true;
     if (s_no_timeout) {
-        ESP_LOGW(TAG, "BLE GOTOWE jako %s (bez limitu czasu - czekam na konfiguracje Wi-Fi).", s_device_name);
+        ESP_LOGW(TAG, "BLE GOTOWE jako %s (bez limitu czasu - czekam na konfiguracje Wi-Fi i MQTT).", s_device_name);
         return;
     }
     if (s_ble_timer == NULL) {
@@ -259,6 +465,8 @@ static void ble_config_stop_internal(void) {
     esp_bt_controller_deinit();
     s_ble_is_active = false;
     s_ble_connected = false;
+    for (size_t i = 0; i < FIELD_COUNT; i++) memset(s_fields[i].buf, 0, s_fields[i].max_len + 1);
+    memset(&s_prep, 0, sizeof(s_prep));
     ESP_LOGI(TAG, "BLE wylaczone.");
 }
 
@@ -360,7 +568,8 @@ void ble_config_init(gpio_num_t boot_btn_gpio, bool start_now, factory_reset_cb_
     snprintf(s_device_name, sizeof(s_device_name), "SF-%02X%02X", mac[4], mac[5]);
 
     if (start_now) {
-        // Brak zapisanego Wi-Fi (nowa plytka / po resecie fabrycznym): BLE od razu, az do skonfigurowania
+        // Plytka nieskonfigurowana (brak Wi-Fi albo brokera MQTT - nowa / po resecie fabrycznym): BLE od razu,
+        // az do skonfigurowania
         s_no_timeout = true;
         ble_config_start();
     }

@@ -254,8 +254,14 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     offline_buffer_init();
     wifi_connect_init();
-    // Brak zapisanej sieci (nowa plytka / po resecie fabrycznym) = BLE od razu, bez limitu czasu
-    ble_config_init(GPIO_NUM_0, !wifi_has_credentials(), factory_reset);
+    // Skonfigurowana = zapisane Wi-Fi i adres brokera MQTT. Zmiana konfiguracji = restart,
+    // wiec wystarczy sprawdzic raz. Nieskonfigurowana (nowa / po resecie fabrycznym) = BLE od razu, bez limitu czasu
+    const bool configured = wifi_has_credentials() && mqtt_has_config();
+    if (!configured) {
+        ESP_LOGW(TAG, "Plytka nieskonfigurowana (Wi-Fi: %s, MQTT: %s) - czekam na konfiguracje BLE",
+                 wifi_has_credentials() ? "jest" : "brak", mqtt_has_config() ? "jest" : "brak");
+    }
+    ble_config_init(GPIO_NUM_0, !configured, factory_reset);
 
     // 2. Inicjalizacja OneWire (wykonujemy raz przed pętlą)
     onewire_bus_handle_t bus = NULL;
@@ -330,7 +336,8 @@ void app_main(void) {
         bool is_online = false;
         bool mqtt_ready = false;
 
-        if (wifi_connect_start() == ESP_OK) {
+        // Nieskonfigurowana plytka nie laczy sie z siecia - czeka tylko na BLE
+        if (configured && wifi_connect_start() == ESP_OK) {
             is_online = true;
             esp_task_wdt_reset();
 
@@ -340,7 +347,7 @@ void app_main(void) {
             ESP_LOGI(TAG, "[SYSTEM] ONLINE. Start MQTT...");
             mqtt_ready = mqtt_app_start();
             esp_task_wdt_reset();
-        } else {
+        } else if (configured) {
             ESP_LOGE(TAG, "Brak WiFi (Offline).");
         }
 
@@ -351,13 +358,14 @@ void app_main(void) {
         }
 
         // 1. Pomiar wszystkich czujnikow (kazdy z wlasnym znacznikiem czasu).
-        // Plytka bez zapisanej sieci (nowa / po resecie fabrycznym) nie ma wlasciciela - nie zbiera pomiarow,
-        // inaczej po konfiguracji na konto nowego wlasciciela trafilyby pomiary sprzed przekazania.
+        // Plytka nieskonfigurowana nie ma wlasciciela i nie zbiera pomiarow, 
+        // inaczej po konfiguracji na serwer nowego wlasciciela trafilyby pomiary sprzed przekazania.
+        // Skonfigurowana przy awarii brokera / Wi-Fi mierzy dalej i buforuje.
         static SensorData readings[MAX_SENSORS];
         int reading_count = 0;
         int sensors_to_read = ds18b20_device_num;
-        if (!wifi_has_credentials()) {
-            ESP_LOGW(TAG, "Plytka nieskonfigurowana (brak Wi-Fi) - pomijam pomiary, czekam na konfiguracje BLE");
+        if (!configured) {
+            ESP_LOGW(TAG, "Plytka nieskonfigurowana (brak Wi-Fi albo MQTT) - pomijam pomiary, czekam na konfiguracje BLE");
             sensors_to_read = 0;
         }
         for (int i = 0; i < sensors_to_read; i++) {

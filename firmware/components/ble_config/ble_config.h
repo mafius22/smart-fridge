@@ -8,7 +8,7 @@
 typedef void (*factory_reset_cb_t)(void);
 
 // Inicjalizacja komponentu i start taska przycisku.
-// start_now = true: BLE od razu i bez limitu czasu (brak zapisanej sieci Wi-Fi)
+// start_now = true: BLE od razu i bez limitu czasu (plytka nieskonfigurowana: brak Wi-Fi albo brokera MQTT)
 void ble_config_init(gpio_num_t boot_btn_gpio, bool start_now, factory_reset_cb_t factory_reset_cb);
 
 // Ręczne zatrzymanie

@@ -8,6 +8,7 @@
 #include "esp_system.h"
 #include "esp_mac.h"
 #include "ota_manager.h"
+#include "storage_manager.h"
 #include <stdbool.h>
 
 static const char *TAG = "MQTT_HANDLER";
@@ -18,10 +19,25 @@ static volatile bool s_restart_requested = false;
 // Deklaracja zapowiadająca (forward declaration)
 void mqtt_app_stop(void);
 
-// Pobieramy konfigurację z Kconfig
-#define MQTT_BROKER_URI     CONFIG_HIVE_MQTT_BROKER_URI
-#define MQTT_USERNAME       CONFIG_HIVE_MQTT_USERNAME
-#define MQTT_PASSWORD       CONFIG_HIVE_MQTT_PASSWORD
+// Dane brokera z NVS
+#define MQTT_URI_MAX_LEN    128
+#define MQTT_USER_MAX_LEN   64
+#define MQTT_PASS_MAX_LEN   128
+static char s_broker_uri[MQTT_URI_MAX_LEN + 1];
+static char s_broker_user[MQTT_USER_MAX_LEN + 1];
+static char s_broker_pass[MQTT_PASS_MAX_LEN + 1];
+
+// true = jest zapisany adres brokera (login i haslo moga byc puste - broker bez uwierzytelniania)
+static bool load_broker_config(void) {
+    storage_load_str("mqtt", "uri", s_broker_uri, sizeof(s_broker_uri), "");
+    storage_load_str("mqtt", "user", s_broker_user, sizeof(s_broker_user), "");
+    storage_load_str("mqtt", "pass", s_broker_pass, sizeof(s_broker_pass), "");
+    return s_broker_uri[0] != '\0';
+}
+
+bool mqtt_has_config(void) {
+    return load_broker_config();
+}
 
 #define MQTT_TOPIC_PREFIX   "sf/v1"
 
@@ -75,7 +91,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     
     switch ((esp_mqtt_event_id_t)event_id) {
         case MQTT_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "MQTT Polaczono z: %s", MQTT_BROKER_URI);
+            ESP_LOGI(TAG, "MQTT Polaczono z: %s", s_broker_uri);
             xEventGroupSetBits(s_mqtt_event_group, MQTT_CONNECTED_BIT);
 
             // Polaczenie dziala - nowy firmware po OTA moze odbierac kolejne aktualizacje
@@ -163,12 +179,17 @@ bool mqtt_app_start(void) {
 
     init_device_topics();
 
+    if (!load_broker_config()) {
+        ESP_LOGW(TAG, "Brak adresu brokera MQTT - skonfiguruj przez BLE.");
+        return false;
+    }
+
+    // Port z adresu (mqtts://host:8883); bez portu domyslny dla schematu: mqtts 8883, mqtt 1883
     const esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = MQTT_BROKER_URI,
-        .broker.address.port = 8883,
+        .broker.address.uri = s_broker_uri,
         .credentials.client_id = s_device_id,
-        .credentials.username = MQTT_USERNAME,
-        .credentials.authentication.password = MQTT_PASSWORD,
+        .credentials.username = s_broker_user[0] ? s_broker_user : NULL,
+        .credentials.authentication.password = s_broker_pass[0] ? s_broker_pass : NULL,
         .broker.verification.crt_bundle_attach = esp_crt_bundle_attach, // Certyfikaty Vercel/SSL
         .session.keepalive = 60,
         .network.timeout_ms = 15000,

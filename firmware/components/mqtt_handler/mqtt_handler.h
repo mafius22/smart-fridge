@@ -4,7 +4,10 @@
 #include <stdbool.h>
 #include "offline_buffer.h"
 
-// Inicjalizacja i połączenie z brokerem
+// true = w NVS jest zapisany adres brokera (skonfigurowany przez BLE)
+bool mqtt_has_config(void);
+
+// Inicjalizacja i połączenie z brokerem (dane z NVS); false = brak konfiguracji albo brak polaczenia
 bool mqtt_app_start(void);
 
 // Rozłączenie i zwolnienie zasobów
